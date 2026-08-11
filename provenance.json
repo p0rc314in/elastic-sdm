@@ -1,0 +1,159 @@
+{
+  "schema_version": 4,
+  "source_scratch": {
+    "repository": "elastic-sdm-research",
+    "commit": "82182637aa28a3a46ab1bbac5ef5f494c5f927fe",
+    "extracted_at": "2026-08-17"
+  },
+  "implementation": {
+    "upstream_semantic_reference": {
+      "repository": "https://github.com/facebookresearch/sparse-delta-memory",
+      "revision": "183e7df809131b80ad4393741029d0f20fc3640b"
+    },
+    "shape": {
+      "layout": "BBBBBBBA",
+      "width": 128,
+      "attention_heads": 4,
+      "memory_heads": 1,
+      "slots_per_memory_layer": 1024,
+      "reads": 16,
+      "writes": 16,
+      "seed": 0
+    }
+  },
+  "data": {
+    "wikitext_source_manifest_sha256": "f63c7418b844f94cea26782901820b8635edfe362ad193eea79dbabbc80880dd",
+    "wikitext_manifest_sha256": "b1bb41b7bc8f9c1fe4bb22820e6d242d67d4cc143f3763c371ff6ea6e6fd987d",
+    "wikitext_stream_sha256": {
+      "train": "567edc62db7882f2c69176215db23ba06c3b8443f4bf9363d9e0f89aa7fcb316",
+      "validation": "05a6519598fb6bb77a8541933fd2a7cd69db8fd5ad33dadd57ce686dcf7752d4",
+      "test": "56f9ff70776a35d689644535eb9b1b02eb3c3e7fb4df0c8a84d47b0fb5bde13f"
+    },
+    "recall_manifest_sha256": "b0587d62c3ab709c94e37742892451a39463a7d577212b9379bd76d966f97800",
+    "recall_stream_seed": 102337
+  },
+  "campaigns": {
+    "recall": {
+      "billed_gpu_hours": 23.827531476666664,
+      "billed_cost_usd": 36.85137508551111,
+      "results": {
+        "native_sdm_rw16_price000": {
+          "archive_sha256": "4599994a756fd0e83ca8ef406409579ac28e60f5c2f351215ec1981103d661b0",
+          "result_json_sha256": "440cffcd5ac56fb4b3547199630964bba417f794befb3ee3c1dc922b07f69e4e"
+        },
+        "native_sdm_rw16_price0012": {
+          "archive_sha256": "01e95305283a50e985e89b39e1e0ecddf0dd218c3563066f7311ca4d85db45a0",
+          "result_json_sha256": "e4648be39faa6fb530a60aa0d2ed7e218fe87f69530f245ecae4efd5aa0a5f6e"
+        },
+        "native_sdm_rw16_price0024": {
+          "archive_sha256": "2bd5f59266d8fd431ed1c508e930f5697503ed05b723cc0bf96908c533ec2122",
+          "result_json_sha256": "9a04c753effc2fd18c4b6679bfe465ff51b29e2e7d212f8d5f66128071459900"
+        },
+        "native_sdm_rw16_price0040": {
+          "archive_sha256": "381ff98ec1e2dc0bbd2b7686e190fb11877040f18d517cfc203e0cb8191433bb",
+          "result_json_sha256": "cffcbf5007d9d0940ff83fef96fe16ad5d4c876e70f92af059ccc36afcac4733"
+        },
+        "native_sdm_rw16_price012": {
+          "archive_sha256": "99b6bb61bd0d9ba17d793c95567c72752179104e90ed5f94fdc07afc570a873f",
+          "result_json_sha256": "d7543f84c0fa2a22c650e15f04ed5db56cf20b25c519f67c248246ddfe3d2e72"
+        },
+        "native_sdm_rw16_price0240": {
+          "archive_sha256": "875b67112cb4ede90669ab576f20de8ed21583cbd6cfbef66f9eda39a00c2386",
+          "result_json_sha256": "432b6d8fde8fad3c19dd0e9b168fe543aea35e989672894c50d9a8a21f21c71b"
+        },
+        "native_sdm_rw16_price0400": {
+          "archive_sha256": "4095bd7acc9eb8917b567db7dfec09011794ff88eaa891579877e9c261dff665",
+          "result_json_sha256": "80516039f365132706a1e99d21c6fd2dc621adae72ef2f8c5e378f5c327d2721"
+        }
+      },
+      "runs": [
+        {
+          "id": "esdm-native-n1024-rw16-price-recall-seed0-v1",
+          "source_result_root": "results/native-sdm-n1024-rw16-price-recall-seed0-v1",
+          "source_archive_sha256": "8ccf817ff6fcfba68164131159a3a88efcbe23dcfdadebc1ab7d78101153abe0",
+          "spec_sha256": "8216878711983036de1dedd802f9285f86604f7b4f8d06bd25e19e44122dc15a",
+          "accelerator": "NVIDIA A100-SXM4-80GB",
+          "billed_gpu_hours": 10.343999623888887,
+          "hourly_rate_usd": 1.49,
+          "billed_cost_usd": 15.412559439594443,
+          "arms": [
+            "native_sdm_rw16_price000",
+            "native_sdm_rw16_price0024",
+            "native_sdm_rw16_price012"
+          ]
+        },
+        {
+          "id": "esdm-native-n1024-rw16-price-recall-grid-seed0-v1",
+          "source_result_root": "results/native-sdm-n1024-rw16-price-recall-grid-seed0-v1",
+          "source_archive_sha256": "029dd449f1f2aa8242b3d7e53338d80d882b7f9caacd8e81d9f553451efa2996",
+          "spec_sha256": "2df2867c41181931c8f09676e81710ca34488f6e5db737f578d1cafa1afd108a",
+          "accelerator": "NVIDIA A100-SXM4-80GB",
+          "billed_gpu_hours": 13.483531852777777,
+          "hourly_rate_usd": 1.59,
+          "billed_cost_usd": 21.438815645916666,
+          "arms": [
+            "native_sdm_rw16_price0012",
+            "native_sdm_rw16_price0040",
+            "native_sdm_rw16_price0240",
+            "native_sdm_rw16_price0400"
+          ]
+        }
+      ]
+    },
+    "language": {
+      "billed_gpu_hours": 5.036126,
+      "billed_cost_usd": 8.00744034,
+      "results": {
+        "native_sdm_rw16_price000": {
+          "archive_sha256": "39403f11276258e77cf40c7f19167032e4e28701074ca69f201bbe59231fd3c5",
+          "result_json_sha256": "bdf18cfb5a50d8faea362a1410faec9d8f3188a0b58d249c87722cbdcc4f967e"
+        },
+        "native_sdm_rw16_price0024": {
+          "archive_sha256": "c6154a86dd6db5c03061cffa8f6be96cec12428fec0b35f2f6eef6bc1d382e57",
+          "result_json_sha256": "9b72d04a8c8900d20cd5ec6110a6cdd4d484551eddbfb44bb226eb49104c5383"
+        }
+      },
+      "runs": [
+        {
+          "id": "esdm-native-n1024-rw16-price-wikitext-seed0-v1",
+          "source_result_root": "results/native-sdm-n1024-rw16-price-wikitext-seed0-v1",
+          "source_archive_sha256": "316c11f9b37b7187331693dc79f5cf02bb02d6ef1230c240367d11ad001be8c0",
+          "spec_sha256": "62c0378770d31b8eaa53506290044f36e8c7590319e57108807c0db6b0148011",
+          "accelerator": "NVIDIA A100-SXM4-80GB",
+          "billed_gpu_hours": 5.036126,
+          "hourly_rate_usd": 1.59,
+          "billed_cost_usd": 8.00744034,
+          "arms": [
+            "native_sdm_rw16_price000",
+            "native_sdm_rw16_price0024"
+          ]
+        }
+      ]
+    }
+  },
+  "released_sources": {
+    "PROJECT_IDENTITY.json": "b7ba565164ea8f2b8ea15566a91ecdc973ab1fa1d79aa023cec11f436115205e",
+    "elastic_sdm/__init__.py": "17fea469eec26323f2a444ae45c6355e7c0cbe0e5c198f7563457dcf4268d948",
+    "elastic_sdm/allocator.py": "3361b15782c7ce680c0f0184a0b072dfea77e2fef60bb44eb723e81ef829d268",
+    "elastic_sdm/model.py": "b355f4661dd2356e7bf2a43de00019958cf47ed8dc423a6b187c20a4616a243e",
+    "elastic_sdm/sdm.py": "0f58623b6629c2c75554077dad21432f00d9c5b142aa2adcd37651438b9d5f63",
+    "benchmarks/prepare_recall_suite.py": "fbb8293b5fb1551ece712ce2c5b4c7fea40cd19e3dca0895534f069b2e2defeb",
+    "benchmarks/train_recall_cuda.py": "9d4957c02e7944d72035b2f7047ab0428f56ac0b1e866be1cbcb3a213f12805a",
+    "benchmarks/train_wikitext_cuda.py": "555263d4ec4dfed4772eaa792034d46e16945653a6041e084a7dc4cf8bf234a8",
+    "scripts/prepare_wikitext.py": "b4ecad16d93732731cb8d6cb3c760d63720f55da4569b8e94f27a5bc420af411",
+    "scripts/run_experiments.py": "d3c2e1057f72f0fd3ab8c1818c8cbfc7df0c406c63c96bae04cf909ac1b66e55",
+    "scripts/check_results.py": "2b80727de7f3e43f0866bc7cfa5213609a65d460a2c644005eb7d58ecd88bb77",
+    "scripts/verify_results.py": "12e8edf284424e758f61613282e9f5b6b59757d74d9d0adf01ed787338410b12",
+    "reproduce.sh": "aed1cf30b57b01acde9eb32fe0ba36c43f8403466ed43fb00f76b42f5b469ab8",
+    "pyproject.toml": "01f002161b46323de4e3ed81b387e01f473f9142083ab762dfcfb8dc31f46f12",
+    "uv.lock": "8927fb5d256e90b16ffaba30ebd1b4ccaff8eb9bd81249e0b333161640f6c99a"
+  },
+  "included_measurements": {
+    "data/recall_curve.csv": "074d16d666a33f24f702b06216580b3ec56a4e5daad89c13bd6084df2c0fd3a8",
+    "data/language_curve.csv": "ff60a66d4f14bfe42764329bf3f93b00cfe2e3ae7bc55c3570bc8a920ab09b80"
+  },
+  "included_figures": {
+    "figures/frontier.png": "c3a520605425b63d8f43e274a0a8ac13350c7f6cc1022bb24bed720dc87c7d19",
+    "figures/social-preview.png": "8ab9803d78d909975629b92c76ef74d524b60d4b358b8c1dba41f706ce51f005"
+  }
+}
