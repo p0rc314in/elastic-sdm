@@ -10,7 +10,8 @@ fi
 
 case "$stage" in
   prepare)
-    python3 scripts/prepare_wikitext.py --output-root runs/data
+    python3 scripts/prepare_wikitext.py \
+      --output runs/data/wikitext103_gpt2_causal_t2048_coverage_v1
     python3 benchmarks/prepare_recall_suite.py \
       --output-dir runs/data/adaptive_recall_seed102337_v1 \
       --steps 30000 --batch-size 32 --eval-examples 2048 \

@@ -6,23 +6,68 @@ import unittest
 import torch
 
 from elastic_sdm.model import LanguageModel
-from elastic_sdm.sdm import SparseDeltaMemory, dense_recurrence_block_width
+from elastic_sdm.sdm import (
+    SparseDeltaMemory,
+    _released_fused_chunk_size,
+    dense_recurrence_block_width,
+    dense_recurrence_slot_tiles,
+)
 
 
 class NativeSDMTest(unittest.TestCase):
-    def test_dense_recurrence_tile_stays_bounded_through_n1024(self) -> None:
+    def test_released_fused_chunks_are_power_of_two_and_bounded(self) -> None:
+        expected = {
+            1: 16,
+            15: 16,
+            16: 16,
+            31: 16,
+            48: 32,
+            208: 128,
+            528: 256,
+        }
+        for time, chunk in expected.items():
+            self.assertEqual(_released_fused_chunk_size(time), chunk)
+            self.assertEqual(chunk & (chunk - 1), 0)
+            self.assertLessEqual(chunk, 256)
+        with self.assertRaisesRegex(ValueError, "time must be positive"):
+            _released_fused_chunk_size(0)
+
+    def test_dense_recurrence_tile_stays_bounded_through_n4096(self) -> None:
         expected = {
             16: 16,
             256: 16,
             512: 8,
             1_024: 4,
+            2_304: 2,
+            4_096: 1,
         }
         for slots, width in expected.items():
             self.assertEqual(dense_recurrence_block_width(slots), width)
-            block_slots = 1 << (slots - 1).bit_length()
-            self.assertLessEqual(block_slots * width, 4_096)
-        with self.assertRaisesRegex(ValueError, "at most 1,024"):
-            dense_recurrence_block_width(1_025)
+            main_slots, tail_slots = dense_recurrence_slot_tiles(slots)
+            self.assertLessEqual((main_slots + tail_slots) * width, 4_608)
+        with self.assertRaisesRegex(ValueError, "at most 4,096"):
+            dense_recurrence_block_width(4_097)
+        with self.assertRaisesRegex(ValueError, "at most 4,096"):
+            dense_recurrence_slot_tiles(4_097)
+
+    def test_dense_recurrence_slot_tiles_avoid_n2304_padding(self) -> None:
+        self.assertEqual(dense_recurrence_slot_tiles(1_024), (1_024, 0))
+        self.assertEqual(dense_recurrence_slot_tiles(2_304), (2_048, 256))
+        self.assertEqual(dense_recurrence_slot_tiles(4_096), (4_096, 0))
+
+    def test_n2304_controller_preserves_serial_prefix_causality(self) -> None:
+        torch.manual_seed(11)
+        module = SparseDeltaMemory(16, slots=2_304, reads=4, writes=4).eval()
+        tokens = torch.randn(1, 4, 16)
+        changed = tokens.clone()
+        changed[:, 3:] = torch.randn_like(changed[:, 3:])
+        with torch.no_grad():
+            baseline = module(tokens, serial_reference=True)
+            counterfactual = module(changed, serial_reference=True)
+        self.assertEqual(
+            float((baseline[:, :3] - counterfactual[:, :3]).abs().max()),
+            0.0,
+        )
 
     def test_n1024_controller_preserves_serial_prefix_causality(self) -> None:
         torch.manual_seed(10)

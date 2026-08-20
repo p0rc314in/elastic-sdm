@@ -1,9 +1,9 @@
-"""Small-workspace Sparse Delta Memory with exact causal recurrence.
+"""Faithful Sparse Delta Memory with exact causal recurrence.
 
 The controller in this module follows the released SDM semantics while using a
-compact, dependency-free recurrent kernel for the deliberately small memory
-banks studied here. Every physical SDM layer owns learned initial memory and
-applies the released gated-delta rule.
+dependency-free oracle off CUDA and Facebook SDM's released fused WY
+forward/backward when its checksum-pinned runtime is available. Every physical
+SDM layer owns learned initial memory and applies the released gated-delta rule.
 
 Upstream semantic reference:
 https://github.com/facebookresearch/sparse-delta-memory/tree/
@@ -13,7 +13,9 @@ https://github.com/facebookresearch/sparse-delta-memory/tree/
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
+import os
 
 import torch
 import torch.nn.functional as F
@@ -78,8 +80,12 @@ def dense_recurrence_block_width(slots: int) -> int:
 
     The kernel keeps one ``slots x BLOCK_D`` tile live while it walks the
     sequence. Shrinking the width tile as the logical table grows keeps the
-    resident tile at no more than 4,096 elements through N=1,024. This is a
-    capability-training path; the sparse serving allocator remains separate.
+    resident tile near 4,096 elements through N=4,096. Tables above 1,024 rows
+    use a power-of-two main segment plus a separately masked tail segment, so
+    N=2,304 executes as 2,048+256 rather than padding to 4,096. The two
+    segments remain in one program, preserving the recurrence's cross-slot
+    retrieved-value reduction. This is a capability-training path; the sparse
+    serving allocator remains separate.
     """
 
     if slots <= 0:
@@ -90,7 +96,26 @@ def dense_recurrence_block_width(slots: int) -> int:
         return 8
     if slots <= 1_024:
         return 4
-    raise ValueError("dense SDM training recurrence supports at most 1,024 slots")
+    if slots <= 2_304:
+        return 2
+    if slots <= 4_096:
+        return 1
+    raise ValueError("dense SDM training recurrence supports at most 4,096 slots")
+
+
+def dense_recurrence_slot_tiles(slots: int) -> tuple[int, int]:
+    """Return power-of-two main and tail slot segments for one program."""
+
+    if slots <= 0:
+        raise ValueError("slots must be positive")
+    if slots > 4_096:
+        raise ValueError("dense SDM training recurrence supports at most 4,096 slots")
+    if slots <= 1_024:
+        return 1 << (slots - 1).bit_length(), 0
+    main = 1 << (slots.bit_length() - 1)
+    remainder = slots - main
+    tail = 0 if remainder == 0 else 1 << (remainder - 1).bit_length()
+    return main, tail
 
 
 def product_key_routes(
@@ -547,6 +572,7 @@ if triton is not None:
         slots: tl.constexpr,
         BLOCK_D: tl.constexpr,
         BLOCK_N: tl.constexpr,
+        TAIL_N: tl.constexpr,
         BLOCKS_D: tl.constexpr,
     ):
         program = tl.program_id(0)
@@ -562,6 +588,17 @@ if triton is not None:
             mask=(offsets_n[:, None] < slots) & (offsets_d[None, :] < width),
             other=0.0,
         ).to(tl.float32)
+        if TAIL_N > 0:
+            offsets_tail = BLOCK_N + tl.arange(0, TAIL_N)
+            tail_memory_offsets = (
+                batch * slots + offsets_tail[:, None]
+            ) * width + offsets_d[None, :]
+            tail_memory = tl.load(
+                initial_memory + tail_memory_offsets,
+                mask=(offsets_tail[:, None] < slots)
+                & (offsets_d[None, :] < width),
+                other=0.0,
+            ).to(tl.float32)
 
         for position in range(0, time):
             route_offsets = (batch * time + position) * slots + offsets_n
@@ -575,12 +612,35 @@ if triton is not None:
                 mask=offsets_n < slots,
                 other=0.0,
             ).to(tl.float32)
+            if TAIL_N > 0:
+                tail_route_offsets = (
+                    (batch * time + position) * slots + offsets_tail
+                )
+                tail_writes = tl.load(
+                    write_routes + tail_route_offsets,
+                    mask=offsets_tail < slots,
+                    other=0.0,
+                ).to(tl.float32)
+                tail_reads = tl.load(
+                    read_routes + tail_route_offsets,
+                    mask=offsets_tail < slots,
+                    other=0.0,
+                ).to(tl.float32)
             alpha = tl.exp(
                 tl.load(forget_log_gate + batch * time + position).to(tl.float32)
             )
             selected = writes != 0.0
             memory = tl.where(selected[:, None], memory * alpha, memory)
             retrieved = tl.sum(writes[:, None] * memory, axis=0)
+            if TAIL_N > 0:
+                tail_selected = tail_writes != 0.0
+                tail_memory = tl.where(
+                    tail_selected[:, None], tail_memory * alpha, tail_memory
+                )
+                retrieved += tl.sum(
+                    tail_writes[:, None] * tail_memory,
+                    axis=0,
+                )
             value_offsets = (batch * time + position) * width + offsets_d
             value = tl.load(
                 values + value_offsets,
@@ -591,7 +651,14 @@ if triton is not None:
             erase = tl.load(erase_gate + batch * time + position).to(tl.float32)
             delta = write_gate * value - erase * retrieved
             memory += writes[:, None] * delta[None, :]
+            if TAIL_N > 0:
+                tail_memory += tail_writes[:, None] * delta[None, :]
             reading = tl.sum(reads[:, None] * memory, axis=0)
+            if TAIL_N > 0:
+                reading += tl.sum(
+                    tail_reads[:, None] * tail_memory,
+                    axis=0,
+                )
             tl.store(
                 readings + value_offsets,
                 reading,
@@ -605,6 +672,16 @@ if triton is not None:
                 memory,
                 mask=(offsets_n[:, None] < slots) & (offsets_d[None, :] < width),
             )
+            if TAIL_N > 0:
+                tail_state_offsets = (
+                    (batch * time + position) * slots + offsets_tail[:, None]
+                ) * width + offsets_d[None, :]
+                tl.store(
+                    states + tail_state_offsets,
+                    tail_memory,
+                    mask=(offsets_tail[:, None] < slots)
+                    & (offsets_d[None, :] < width),
+                )
 
     @triton.jit
     def _native_sdm_backward_kernel(
@@ -630,6 +707,7 @@ if triton is not None:
         slots: tl.constexpr,
         BLOCK_D: tl.constexpr,
         BLOCK_N: tl.constexpr,
+        TAIL_N: tl.constexpr,
         BLOCKS_D: tl.constexpr,
     ):
         program = tl.program_id(0)
@@ -645,6 +723,17 @@ if triton is not None:
             mask=(offsets_n[:, None] < slots) & (offsets_d[None, :] < width),
             other=0.0,
         ).to(tl.float32)
+        if TAIL_N > 0:
+            offsets_tail = BLOCK_N + tl.arange(0, TAIL_N)
+            tail_memory_offsets = (
+                batch * slots + offsets_tail[:, None]
+            ) * width + offsets_d[None, :]
+            tail_grad_memory = tl.load(
+                grad_final_memory + tail_memory_offsets,
+                mask=(offsets_tail[:, None] < slots)
+                & (offsets_d[None, :] < width),
+                other=0.0,
+            ).to(tl.float32)
 
         for reverse_position in range(0, time):
             position = time - 1 - reverse_position
@@ -659,6 +748,20 @@ if triton is not None:
                 mask=offsets_n < slots,
                 other=0.0,
             ).to(tl.float32)
+            if TAIL_N > 0:
+                tail_route_offsets = (
+                    (batch * time + position) * slots + offsets_tail
+                )
+                tail_writes = tl.load(
+                    write_routes + tail_route_offsets,
+                    mask=offsets_tail < slots,
+                    other=0.0,
+                ).to(tl.float32)
+                tail_reads = tl.load(
+                    read_routes + tail_route_offsets,
+                    mask=offsets_tail < slots,
+                    other=0.0,
+                ).to(tl.float32)
             alpha = tl.exp(
                 tl.load(forget_log_gate + batch * time + position).to(tl.float32)
             )
@@ -690,6 +793,37 @@ if triton is not None:
                 other=0.0,
             ).to(tl.float32)
             previous = previous_from_states + previous_from_initial
+            if TAIL_N > 0:
+                tail_state_offsets = (
+                    (batch * time + position) * slots + offsets_tail[:, None]
+                ) * width + offsets_d[None, :]
+                tail_current = tl.load(
+                    states + tail_state_offsets,
+                    mask=(offsets_tail[:, None] < slots)
+                    & (offsets_d[None, :] < width),
+                    other=0.0,
+                ).to(tl.float32)
+                tail_previous_state_offsets = (
+                    (batch * time + position - 1) * slots
+                    + offsets_tail[:, None]
+                ) * width + offsets_d[None, :]
+                tail_previous_from_states = tl.load(
+                    states + tail_previous_state_offsets,
+                    mask=(position > 0)
+                    & (offsets_tail[:, None] < slots)
+                    & (offsets_d[None, :] < width),
+                    other=0.0,
+                ).to(tl.float32)
+                tail_previous_from_initial = tl.load(
+                    initial_memory + tail_memory_offsets,
+                    mask=(position == 0)
+                    & (offsets_tail[:, None] < slots)
+                    & (offsets_d[None, :] < width),
+                    other=0.0,
+                ).to(tl.float32)
+                tail_previous = (
+                    tail_previous_from_states + tail_previous_from_initial
+                )
 
             value_offsets = (batch * time + position) * width + offsets_d
             output_gradient = tl.load(
@@ -707,10 +841,34 @@ if triton is not None:
                 mask=offsets_n < slots,
             )
             grad_memory += reads[:, None] * output_gradient[None, :]
+            if TAIL_N > 0:
+                tail_route_read_gradient = tl.sum(
+                    tail_current * output_gradient[None, :],
+                    axis=1,
+                )
+                tl.atomic_add(
+                    grad_read_routes + tail_route_offsets,
+                    tail_route_read_gradient,
+                    mask=offsets_tail < slots,
+                )
+                tail_grad_memory += (
+                    tail_reads[:, None] * output_gradient[None, :]
+                )
 
             selected = writes != 0.0
             decayed = tl.where(selected[:, None], previous * alpha, previous)
             retrieved = tl.sum(writes[:, None] * decayed, axis=0)
+            if TAIL_N > 0:
+                tail_selected = tail_writes != 0.0
+                tail_decayed = tl.where(
+                    tail_selected[:, None],
+                    tail_previous * alpha,
+                    tail_previous,
+                )
+                retrieved += tl.sum(
+                    tail_writes[:, None] * tail_decayed,
+                    axis=0,
+                )
             value = tl.load(
                 values + value_offsets,
                 mask=offsets_d < width,
@@ -722,6 +880,15 @@ if triton is not None:
                 axis=1,
             )
             grad_delta = tl.sum(writes[:, None] * grad_memory, axis=0)
+            if TAIL_N > 0:
+                tail_route_write_gradient = tl.sum(
+                    tail_grad_memory * delta[None, :],
+                    axis=1,
+                )
+                grad_delta += tl.sum(
+                    tail_writes[:, None] * tail_grad_memory,
+                    axis=0,
+                )
             grad_write_by_width = grad_delta * value
             grad_erase_by_width = -grad_delta * retrieved
             grad_value = write_gate * grad_delta
@@ -730,21 +897,51 @@ if triton is not None:
                 decayed * grad_retrieved[None, :],
                 axis=1,
             )
+            if TAIL_N > 0:
+                tail_route_write_gradient += tl.sum(
+                    tail_decayed * grad_retrieved[None, :],
+                    axis=1,
+                )
             grad_decayed = grad_memory + writes[:, None] * grad_retrieved[None, :]
             grad_alpha_by_width = tl.sum(
                 tl.where(selected[:, None], grad_decayed * previous, 0.0),
                 axis=0,
             )
+            if TAIL_N > 0:
+                tail_grad_decayed = (
+                    tail_grad_memory
+                    + tail_writes[:, None] * grad_retrieved[None, :]
+                )
+                grad_alpha_by_width += tl.sum(
+                    tl.where(
+                        tail_selected[:, None],
+                        tail_grad_decayed * tail_previous,
+                        0.0,
+                    ),
+                    axis=0,
+                )
             grad_memory = tl.where(
                 selected[:, None],
                 grad_decayed * alpha,
                 grad_decayed,
             )
+            if TAIL_N > 0:
+                tail_grad_memory = tl.where(
+                    tail_selected[:, None],
+                    tail_grad_decayed * alpha,
+                    tail_grad_decayed,
+                )
             tl.atomic_add(
                 grad_write_routes + route_offsets,
                 route_write_gradient,
                 mask=offsets_n < slots,
             )
+            if TAIL_N > 0:
+                tl.atomic_add(
+                    grad_write_routes + tail_route_offsets,
+                    tail_route_write_gradient,
+                    mask=offsets_tail < slots,
+                )
             tl.store(
                 grad_values + value_offsets,
                 grad_value,
@@ -771,6 +968,13 @@ if triton is not None:
             grad_memory,
             mask=(offsets_n[:, None] < slots) & (offsets_d[None, :] < width),
         )
+        if TAIL_N > 0:
+            tl.store(
+                grad_initial_memory + tail_memory_offsets,
+                tail_grad_memory,
+                mask=(offsets_tail[:, None] < slots)
+                & (offsets_d[None, :] < width),
+            )
 
 
 class _NativeSDMRecurrence(torch.autograd.Function):
@@ -827,9 +1031,7 @@ class _NativeSDMRecurrence(torch.autograd.Function):
         if any(not tensor.is_contiguous() for tensor in tensors):
             raise ValueError("optimized SDM recurrence inputs must be contiguous")
         block_d = dense_recurrence_block_width(slots)
-        block_n = triton.next_power_of_2(slots)
-        if block_n > 1_024:
-            raise ValueError("dense SDM training recurrence supports at most 1,024 slots")
+        block_n, tail_n = dense_recurrence_slot_tiles(slots)
         blocks_d = triton.cdiv(width, block_d)
         readings = torch.empty_like(values)
         states = torch.empty(
@@ -855,6 +1057,7 @@ class _NativeSDMRecurrence(torch.autograd.Function):
             slots=slots,
             BLOCK_D=block_d,
             BLOCK_N=block_n,
+            TAIL_N=tail_n,
             BLOCKS_D=blocks_d,
             num_warps=4,
             num_stages=1,
@@ -872,6 +1075,7 @@ class _NativeSDMRecurrence(torch.autograd.Function):
         )
         ctx.block_d = block_d
         ctx.block_n = block_n
+        ctx.tail_n = tail_n
         ctx.blocks_d = blocks_d
         return readings, final_memory
 
@@ -944,6 +1148,7 @@ class _NativeSDMRecurrence(torch.autograd.Function):
             slots=slots,
             BLOCK_D=ctx.block_d,
             BLOCK_N=ctx.block_n,
+            TAIL_N=ctx.tail_n,
             BLOCKS_D=ctx.blocks_d,
             num_warps=4,
             num_stages=1,
@@ -993,6 +1198,136 @@ def gated_delta_recurrence(
         forget_log_gate.contiguous(),
         read_routes.contiguous(),
     )
+
+
+@lru_cache(maxsize=1)
+def released_fused_sdm_available() -> bool:
+    """Return whether the released fused SDM training operator is importable."""
+
+    try:
+        from lingua.sparse_delta_memory.memory_ops import (  # noqa: F401
+            GatedSparseMemoryWriteRead,
+        )
+    except ImportError:
+        return False
+    return True
+
+
+def _pad_released_parallel_time(
+    tensors: tuple[torch.Tensor, ...],
+    *,
+    chunk_size: int,
+) -> tuple[tuple[torch.Tensor, ...], int]:
+    """Pad each recurrent bank so released WY chunks never cross banks."""
+
+    time = tensors[0].shape[1]
+    padded_time = math.ceil(time / chunk_size) * chunk_size
+    if padded_time == time:
+        return tensors, time
+    padded: list[torch.Tensor] = []
+    for tensor in tensors:
+        shape = list(tensor.shape)
+        shape[1] = padded_time - time
+        fill = torch.zeros(shape, device=tensor.device, dtype=tensor.dtype)
+        padded.append(torch.cat((tensor, fill), dim=1))
+    return tuple(padded), padded_time
+
+
+def _released_fused_chunk_size(time: int) -> int:
+    """Choose a released-WY-compatible power-of-two chunk through 256."""
+
+    if time <= 0:
+        raise ValueError("recurrence time must be positive")
+    if time < 16:
+        return 16
+    return min(256, 1 << (time.bit_length() - 1))
+
+
+def released_fused_gated_delta_recurrence(
+    initial_memory: torch.Tensor,
+    write_indices: torch.Tensor,
+    write_weights: torch.Tensor,
+    values: torch.Tensor,
+    input_gate: torch.Tensor,
+    forget_log_gate: torch.Tensor,
+    read_indices: torch.Tensor,
+    read_weights: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run released SDM's exact sparse WY forward/backward implementation."""
+
+    from lingua.sparse_delta_memory.memory_ops import GatedSparseMemoryWriteRead
+
+    banks, slots, width = initial_memory.shape
+    time = values.shape[1]
+    if (
+        write_indices.ndim != 3
+        or write_weights.shape != write_indices.shape
+        or read_indices.ndim != 3
+        or read_weights.shape != read_indices.shape
+        or read_indices.shape[:2] != (banks, time)
+        or write_indices.shape[:2] != (banks, time)
+        or values.shape != (banks, time, width)
+        or input_gate.shape != (banks, time)
+        or forget_log_gate.shape != (banks, time)
+    ):
+        raise ValueError("released fused SDM recurrence inputs do not align")
+    chunk_size = _released_fused_chunk_size(time)
+    offsets = (
+        torch.arange(banks, device=values.device, dtype=torch.int64).view(
+            banks, 1, 1
+        )
+        * slots
+    )
+    inputs, padded_time = _pad_released_parallel_time(
+        (
+            write_indices.to(torch.int64) + offsets,
+            write_weights,
+            values,
+            input_gate.unsqueeze(-1),
+            forget_log_gate.unsqueeze(-1),
+            read_indices.to(torch.int64) + offsets,
+            read_weights,
+        ),
+        chunk_size=chunk_size,
+    )
+    (
+        padded_write_indices,
+        padded_write_weights,
+        padded_values,
+        padded_input_gate,
+        padded_forget,
+        padded_read_indices,
+        padded_read_weights,
+    ) = inputs
+    if padded_time != time:
+        bank_base = offsets
+        padded_write_indices[:, time:] = bank_base
+        padded_read_indices[:, time:] = bank_base
+    memory = initial_memory.contiguous().reshape(banks * slots, width)
+    # The released operator explicitly keeps recurrent storage in bf16 while
+    # performing its WY solve and accumulation in fp32. Ambient model autocast
+    # would downcast selected torch.bmm intermediates and create a bf16/fp32
+    # tl.dot pair under Triton 3.6, so preserve the operator's own dtype policy.
+    with torch.autocast(device_type=values.device.type, enabled=False):
+        flat_readings, _ = GatedSparseMemoryWriteRead.apply(
+            memory,
+            padded_write_indices,
+            padded_write_weights,
+            padded_values,
+            padded_input_gate,
+            padded_forget,
+            padded_read_indices,
+            padded_read_weights,
+            chunk_size,
+            True,
+            slots,
+            banks,
+            False,
+            "none",
+            None,
+        )
+    readings = flat_readings.reshape(banks, padded_time, width)[:, :time]
+    return readings, memory.reshape(banks, slots, width)
 
 
 class SparseDeltaMemory(nn.Module):
@@ -1171,8 +1506,6 @@ class SparseDeltaMemory(nn.Module):
                 selected=self.writes,
             )
 
-        read_routes = dense_sparse_routes(read_weights, read_indices, self.slots)
-        write_routes = dense_sparse_routes(write_weights, write_indices, self.slots)
         values = (
             self.value_projection(normalized)
             .reshape(batch, time, self.memory_heads, self.head_width)
@@ -1194,6 +1527,20 @@ class SparseDeltaMemory(nn.Module):
             .flatten(0, 1)
             .to(values.dtype)
         )
+        fused_available = values.is_cuda and released_fused_sdm_available()
+        if (
+            values.is_cuda
+            and os.environ.get("ELASTIC_SDM_REQUIRE_RELEASED_FUSED") == "1"
+            and not fused_available
+        ):
+            raise RuntimeError("required released fused SDM recurrence is unavailable")
+        if serial_reference or not fused_available:
+            read_routes = dense_sparse_routes(
+                read_weights, read_indices, self.slots
+            )
+            write_routes = dense_sparse_routes(
+                write_weights, write_indices, self.slots
+            )
         if serial_reference:
             readings, final_memory, _ = serial_gated_delta_recurrence(
                 initial,
@@ -1202,6 +1549,17 @@ class SparseDeltaMemory(nn.Module):
                 input_gate,
                 forget_log_gate,
                 read_routes,
+            )
+        elif fused_available:
+            readings, final_memory = released_fused_gated_delta_recurrence(
+                initial,
+                write_indices,
+                write_weights,
+                values,
+                input_gate,
+                forget_log_gate,
+                read_indices,
+                read_weights,
             )
         else:
             readings, final_memory = gated_delta_recurrence(
@@ -1254,7 +1612,7 @@ class SparseDeltaMemory(nn.Module):
                     self.memory_heads,
                     self.slots,
                     self.head_width,
-                )
+                ).clone()
                 if include_final_memory
                 else None
             ),

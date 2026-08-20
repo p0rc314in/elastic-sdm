@@ -43,7 +43,7 @@ from benchmarks.prepare_recall_suite import (
     AdaptiveDepthData,
     sha256_file,
 )
-from benchmarks.train_wikitext_cuda import (
+from benchmarks.wikitext_support import (
     atomic_json,
     atomic_torch_save,
     profiler_evidence,

@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/facebookresearch/sparse-delta-memory",
+  "revision": "183e7df809131b80ad4393741029d0f20fc3640b",
+  "upstream_tree_sha1": "3981813d0399f3976e39515efa50ccedb04c322c",
+  "license": "CC-BY-NC-4.0",
+  "license_url": "https://github.com/facebookresearch/sparse-delta-memory/blob/183e7df809131b80ad4393741029d0f20fc3640b/LICENSE",
+  "license_file": {
+    "path": "LICENSE",
+    "sha256": "3711f963c05d0be80d53e5923308a6dee31b203da23435c9cfb7c7b6e4dd5e19"
+  },
+  "modified": false,
+  "files": {
+    "lingua/__init__.py": "abe836cd309d15d814afb3cf18e6eb7abd0726ea6ecc3091335bb82d7236c379",
+    "lingua/sparse_delta_memory/README.md": "b0d28e1b42eff66589fc12c0b4ae5d66af4f3fe55fbc978e1856ba4226b327a9",
+    "lingua/sparse_delta_memory/SNAPSHOT_QUANT.md": "2120fe8006ae25d81d1e336a371cc12478ab74f3f846236767828643eec74ce0",
+    "lingua/sparse_delta_memory/__init__.py": "376171f7553a68a9a2ff403e6c305ff2352e8192a8cdd125145ba7156457fa50",
+    "lingua/sparse_delta_memory/cache.py": "3c529ba708280946cd63d6e95499090f33c04758d9ebfabf40b2ade570f48926",
+    "lingua/sparse_delta_memory/cuda/__init__.py": "abe836cd309d15d814afb3cf18e6eb7abd0726ea6ecc3091335bb82d7236c379",
+    "lingua/sparse_delta_memory/cuda/scatter_write_cuda.py": "e5aa6a4608b355a102c884883a94941d400dff86fdba5edf24cabdafe663821d",
+    "lingua/sparse_delta_memory/cuda/sparse_ip_cuda.py": "d46943e562b3f9e9fb5bc022d0466693cf443a7e8ce49e74df56e4b5110b4e5d",
+    "lingua/sparse_delta_memory/cuda/warp_coop_gather_async_cuda.py": "3dd030250b9cb5fa9e188ad3aa38901701cb690c37e1a2798a599f24c141c14d",
+    "lingua/sparse_delta_memory/cuda/warp_cooperative_gather_cuda.py": "a81be4bf8e90c66f40a328ba4ac2aaa861be7b3f179f4d5a1767310c427fb927",
+    "lingua/sparse_delta_memory/layer.py": "0b14fbc760423e3c39e810a8e583681f1e819d33f683c220433563337cb55da6",
+    "lingua/sparse_delta_memory/memory_ops.py": "b4885bdb9d0c8fd72c730c8ffbfa1c37a25c3717c226eb3900787302f00f4468",
+    "lingua/sparse_delta_memory/memory_stats.py": "1b70ad69a7bdfbb7c9a4ab37b86d2fb24bc5a99a152e47a95c966dd0bf49ff94",
+    "lingua/sparse_delta_memory/triton_argsort.py": "4855cf50a243a722e47df0eede0f71971c8610d9a093b00d9e2c65d4fede09cc"
+  }
+}

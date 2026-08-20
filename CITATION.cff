@@ -4,6 +4,5 @@ title: "Elastic SDM"
 type: software
 authors:
   - name: p0rc314in
-year: 2026
-license: MIT
+version: "0.1.0"
 repository-code: "https://github.com/p0rc314in/elastic-sdm"

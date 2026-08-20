@@ -3,114 +3,126 @@
 ## Intuition
 
 Sparse Delta Memory (SDM) gives each recurrent layer a large logical table but
-touches only a few rows per token. A conventional implementation still gives
-every sequence a private copy of every row. For `L` layers with `N` rows of
-width `V`, copy-on-write changes retained per-sequence state from `O(LNV)` to
-`O(UV + LN)`: learned initial tables are shared, `U` first-written rows across
-the stack become private, and an `LN` map records which logical rows have been
-materialized.
+reads and writes only a few rows per token. [Copy-on-write
+SDM](https://github.com/p0rc314in/copy-on-write-sdm) keeps an untouched row
+shared and makes it private only on its first write.
 
-The allocator can exploit only the sparsity the router produces. Task loss
-does not distinguish rewriting a private row from first-writing a new one,
-even though only the latter increases retained state. Elastic SDM adds that
-missing signal: charge the model for each distinct row it makes private.
-Logical capacity remains available when a sequence needs it, but routine
-sequences can learn to reuse a much smaller working set.
+In ordinary SDM, concentrating writes on fewer addresses over a request saves
+neither compute nor memory: each token still makes the same sparse accesses,
+and the full table is already private. Copy-on-write changes that. A first
+write grows per-request state; rewriting an already-private row does not.
+
+Elastic SDM gives the router a simple mixture-of-experts-style nudge toward
+reuse: first writes have a price, while rewrites do not. The complete logical
+table remains available when needed, but the model can learn to keep each
+request's private working set small.
 
 ## Construction
 
-The SDM controller and recurrence are unchanged. Training adds one term:
+SDM routing, recurrence, and inference are unchanged. Training adds one term:
 
 ```text
 task loss + λ × unique written rows / logical rows
 ```
 
-The forward value counts the exact union of hard top-`W` write addresses. Its
-gradient uses selected softmax mass scattered into logical rows and combined
-over time with a noisy-OR. This is a route-reuse surrogate, not a probabilistic
-interpretation of top-`W` selection. The surrogate disappears at inference.
+Here λ is the price on first-touch occupancy. The forward term counts the exact
+union of hard top-W write addresses. A straight-through noisy-OR surrogate
+supplies the router gradient: selected write mass is cheaper on a row that also
+receives mass elsewhere in the sequence. The auxiliary term disappears at
+inference, and λ = 0 is unpriced SDM.
 
-At serving time, an untouched address reads from shared learned initialization.
-Its first write allocates one private value row; later writes reuse that row.
-The packed allocator is exactly equivalent to a dense logical table for the
-same routes, gates, and values.
-
-The experiment used seven SDM blocks followed by one attention block, width
-128, four attention heads, and one independently configured SDM memory head.
-Every SDM layer had `N=1,024` addresses and balanced sparse access `R=W=16`.
-No parameter or state budget was changed between prices.
+The fixed-reserve experiments use one SDM memory head, N = 1 024, balanced
+R = W = 16 access, and seven SDM layers followed by one attention layer. The
+capacity scan later increases N while preserving the rest of this shape.
 
 ## Result
 
-On a complete 30,000-step adaptive-recall suite, a seven-price sweep exposed a
-quality–state frontier rather than simply trading accuracy for compression:
+### A first-touch price makes a fixed reserve sparser
 
-| λ | Query loss | Exact-set | Private rows | Active rows | Overlay factor | Value + map factor |
-|---:|---:|---:|---:|---:|---:|---:|
-| 0 | 1.92831 | 56.64% | 3,309.2 | 46.17% | 2.15× | 2.11× |
-| 0.012 | 1.93673 | 56.49% | 2,311.5 | 32.25% | 3.08× | 3.00× |
-| 0.024 | 1.92957 | **57.70%** | 1,778.6 | 24.81% | 4.00× | 3.88× |
-| 0.04 | 1.94265 | 54.45% | 1,385.2 | 19.33% | 5.13× | 4.94× |
-| 0.12 | 1.93593 | 57.34% | 1,015.7 | 14.17% | 7.00× | 6.64× |
-| 0.24 | 1.95605 | 54.04% | 746.9 | 10.42% | 9.52× | 8.86× |
-| 0.40 | 1.96253 | 52.57% | 687.2 | 9.59% | 10.35× | 9.58× |
+The same five λ values were tested on two complementary tasks. WikiText-103 is
+the ordinary language-modeling check: each arm trains for three complete
+corpus passes without replacement, then scores every held-out transition.
+Adaptive recall is the retrieval canary: exact-set accuracy requires every
+answer in an example to be correct and exposes retrieval failures that
+aggregate language loss can hide.
 
-Relative to unpriced SDM, `λ=0.024` removed 46.25% of private rows while
-raising exact-set accuracy by 1.06 percentage points; query loss changed by
-only +0.00125. At `λ=0.12`, pricing removed 69.31% of rows and retained a
-0.70-point exact-set advantage at a +0.00762 loss cost.
+For WikiText, private rows as a percentage of unpriced SDM measure the effect
+of the price. Per-request state as a percentage of dense SDM measures the
+resulting footprint, including both the private overlay and direct map.
 
-The extra points show where that gain stops. Occupancy decreases at every
-stronger price, but quality is nonmonotonic: `λ=0.04` falls below both its
-neighbors, and the `0.24` and `0.40` endpoints give up recall for diminishing
-additional state reduction. The measured points are shown directly rather
-than fit with a smooth trend.
+| λ | WikiText test NLL | Private rows (% of unpriced) | Per-request state (% of dense SDM) | Recall exact-set accuracy |
+|---:|---:|---:|---:|---:|
+| 0 | 4.46119 | 100 % | 34.13 % | 56.64 % |
+| 0.024 | 4.46045 | 51.35 % | 17.91 % | 57.70 % |
+| 0.12 | 4.45838 | 20.49 % | 7.61 % | 57.34 % |
+| 0.24 | 4.46101 | 16.79 % | 6.38 % | 54.04 % |
+| 0.40 | 4.47001 | 23.85 % | 8.74 % | 52.57 % |
 
-![Exact-set accuracy against private rows; labels show value-overlay compression](figures/frontier.png)
+At λ = 0.12, WikiText uses 20.49 % as many private rows as unpriced SDM and
+test NLL is 0.00281 lower. Including the direct map, its per-request state is
+7.61 % of dense SDM. WikiText still tolerates λ = 0.24, reaching 6.38 % of
+dense state with test NLL effectively unchanged, but the recall canary has
+begun losing exact answers. At λ = 0.40, state rises to 8.74 % of dense SDM,
+WikiText test NLL rises by 0.00882, and recall degrades further. The shared
+quality region therefore extends through λ = 0.12 in this sweep.
 
-The dense logical FP32 state is 3.5 MiB per sequence at this shape. The
-moderate point's compact live overlay is 0.875 MiB, or 0.903 MiB including the
-fixed 28 KiB direct map. The shared 917,504-parameter initial memory is model
-state, not per-sequence recurrent state. Training activations, kernel
-workspace, and peak device allocation are also separate from these retained
-state measurements.
+![WikiText test NLL against per-request state as a percentage of dense SDM for the five measured first-touch prices](figures/frontier.png)
 
-A matched 65.536-million-token WikiText-103 pair confirms that the selected
-price does not buy recall-specific compression by damaging language modeling.
-This is a control at `λ=0.024`, not a second price sweep. Row counts use 64
-fixed validation routes at a 2,048-token prefix:
+### A larger logical reserve remains sparse
 
-| λ | Test NLL | Private rows | Active rows | Overlay factor | Value + map factor |
-|---:|---:|---:|---:|---:|---:|
-| 0 | 5.45196 | 3,090.7 | 43.12% | 2.30× | 2.26× |
-| 0.024 | **5.44370** | **2,180.7** | **30.42%** | **3.26×** | **3.18×** |
+The second experiment measures how first-touch pricing changes private-state
+growth as the logical reserve expands. It increases N from 1 024 to 2 304
+(2.25×) and compares unpriced SDM with two priced operating points. The nonzero
+pairs hold λ/N fixed, the objective coefficient on the reported mean private
+rows per bank.
 
-Pricing removed 29.44% of the language working set while improving test NLL
-by 0.00826. Its mean loss over all 4,000 training steps was also lower
-(5.93872 versus 5.95085), so the final difference is not an isolated
-evaluation fluctuation.
+Increasing N also raises trainable parameters from 2.61 M to 3.81 M, mostly
+through learned initial memory. Those extra parameters may explain the higher
+exact-set accuracy at N = 2 304, so this experiment does not treat that accuracy
+gain as a capacity result. It tests how private rows grow under matched
+mean-row coefficients.
+
+| Setting | λ, 1 024 → 2 304 | Private-row growth | Per-request state (% of dense SDM), 1 024 → 2 304 | Exact-set accuracy, 1 024 → 2 304 |
+|---|---:|---:|---:|---:|
+| Unpriced SDM | 0 → 0 | +44.18 % | 47.31 % → 30.60 % | 56.64 % → 59.23 % |
+| Moderate | 0.024 → 0.054 | **+11.23 %** | 25.79 % → 13.14 % | 57.70 % → 59.32 % |
+| Strong | 0.12 → 0.27 | **+20.16 %** | 15.06 % → 8.41 % | 57.34 % → 58.94 % |
+
+![Per-request state as a percentage of dense SDM as N increases](figures/capacity-growth.png)
+
+Logical capacity reaches 225 % of its original size. Unpriced private rows grow
+by 44.18 %, while the two priced working sets grow by only 11.23 % and 20.16 %.
+Their per-request share of dense SDM falls from 25.79 % to 13.14 % and from
+15.06 % to 8.41 %, respectively.
 
 ## Why it matters
 
-Sparse addressing limits work per token; it does not by itself minimize the
-state a request retains over time. A first-touch price turns that hidden
-allocation pattern into an explicit training control while preserving SDM's
-logical capacity and inference rule. These are seed-0 mechanism results, not
-an optimized value of `λ`; the useful price should be calibrated at each
-deployment scale and workload.
+Copy-on-write makes untouched SDM rows shareable, and first-touch pricing keeps
+each private working set sparse. Together, they loosen the link between logical
+capacity and per-request memory. In this scan, increasing N to 2.25× its
+original size increased the priced private working sets by only 11.23–20.16 %.
+At N = 2 304, those configurations use only 8.41–13.14 % as much per-request
+state as dense SDM. The direct map and remaining private rows still grow, but
+SDM can expose substantially more logical memory without requiring per-request
+state to grow in proportion.
+
+Across these matched seed-0 runs, λ traces a workload-dependent memory
+frontier.
 
 ## Reproduction
 
-The repository contains the complete nine-arm training and evaluation path:
+The repository contains thirteen unique decision-bearing arms: five WikiText
+prices, the same five N = 1 024 recall prices, and three additional N = 2 304
+recall arms:
 
 ```bash
 uv sync --frozen
 uv run --no-sync ./reproduce.sh all
 ```
 
-See [REPRODUCING.md](REPRODUCING.md) for checksums, stages, hardware, runtime,
-cost, expected ranges, and output locations. Exact definitions and settings
-are in [APPENDIX.md](APPENDIX.md); machine-readable provenance is in
+See [REPRODUCING.md](REPRODUCING.md) for data checksums, hardware, expected
+runtime and cost, output locations, and metric ranges. Exact definitions and
+settings are in [APPENDIX.md](APPENDIX.md); machine-readable provenance is in
 [provenance.json](provenance.json).
 
 ## References

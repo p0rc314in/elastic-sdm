@@ -1,242 +1,603 @@
 #!/usr/bin/env python3
-"""Download WikiText-103 and reproduce the deterministic GPT-2 stream."""
+"""Download and deterministically prepare canonical WikiText-103 locally."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+from importlib import metadata
 import json
+import os
 from pathlib import Path
+import shutil
+import tempfile
+from typing import Any
 import urllib.request
 
 import numpy as np
-import pyarrow.parquet as pq
-import tiktoken
 
 
-REVISION = "5fddba447aa4e75996922ea0d6b18b42f0a81cc4"
-BASE_URL = f"https://huggingface.co/datasets/Salesforce/wikitext/resolve/{REVISION}/wikitext-103-raw-v1"
-SHARDS = {
-    "test": (("test-00000-of-00001.parquet", 732_610, "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91"),),
-    "train": (
-        ("train-00000-of-00002.parquet", 156_987_808, "74da360f23826045b3e6ac6375411fdb15f003030aa74f2596ed08b857cb9212"),
-        ("train-00001-of-00002.parquet", 157_088_770, "ba090ac30dbf5461e8dcbdd1a1b8e6f3cf9c2c756d64f0c1220450acd514f720"),
-    ),
-    "validation": (("validation-00000-of-00001.parquet", 657_209, "204929b7ff9d6184953f867dedb860e40aa69c078fc1e54b3baaa8fb28511c4c"),),
-}
-EXPECTED_STREAMS = {
-    "train": "567edc62db7882f2c69176215db23ba06c3b8443f4bf9363d9e0f89aa7fcb316",
-    "validation": "05a6519598fb6bb77a8541933fd2a7cd69db8fd5ad33dadd57ce686dcf7752d4",
-    "test": "56f9ff70776a35d689644535eb9b1b02eb3c3e7fb4df0c8a84d47b0fb5bde13f",
-}
-EXPECTED_SOURCE_MANIFEST = (
-    "f63c7418b844f94cea26782901820b8635edfe362ad193eea79dbabbc80880dd"
+ROOT = Path(__file__).resolve().parents[1]
+
+import sys
+
+sys.path.insert(0, str(ROOT))
+
+from benchmarks.wikitext103_coverage import (  # noqa: E402
+    CONTEXT_LENGTH,
+    DATASET_CONFIGURATION,
+    DATASET_REPOSITORY,
+    DATASET_REVISION,
+    EFFECTIVE_BATCH_RECORDS,
+    EVALUATION_STRIDE,
+    EXPECTED_TOKEN_COUNTS,
+    FORMAT,
+    OPTIMIZER_STEPS_PER_PASS,
+    PROTOCOL_ID,
+    STREAM_SEED,
+    TOKENIZER_ID,
+    TRAIN_RECORDS_PER_PASS,
+    TRAIN_TARGETS_PER_PASS,
+    VOCAB_SIZE,
+    CanonicalWikiTextData,
+    array_file_record,
+    build_evaluation_index,
+    build_pass_permutations,
+    build_training_index,
+    sha256_file,
+    validate_evaluation_index,
+    validate_training_index,
 )
-EXPECTED_MANIFEST = "b1bb41b7bc8f9c1fe4bb22820e6d242d67d4cc143f3763c371ff6ea6e6fd987d"
 
 
-def sha256(path: Path) -> str:
+SOURCE_FILES = {
+    "train": (
+        f"{DATASET_CONFIGURATION}/train-00000-of-00002.parquet",
+        f"{DATASET_CONFIGURATION}/train-00001-of-00002.parquet",
+    ),
+    "validation": (
+        f"{DATASET_CONFIGURATION}/validation-00000-of-00001.parquet",
+    ),
+    "test": (
+        f"{DATASET_CONFIGURATION}/test-00000-of-00001.parquet",
+    ),
+}
+REMOTE_PAYLOAD_PREFIXES = ("tokens/", "indexes/", "tokenizer/")
+EXPECTED_MANIFEST_SHA256 = (
+    "fc4ef13cbc38070f2d7774dffbfd5be48cab31fe45d6d9995d522fc3bac1dde6"
+)
+EXPECTED_PAYLOAD_SHA256 = (
+    "f430ce52a43a44b88f5a8ec1ec5882866daaa568595bfbd6b765e3369586f85e"
+)
+EXPECTED_DOUBLE_BUILD_SHA256 = (
+    "888d5d27b8086223d48b2347364428947603ab4400a0b7c594d9b350baca7aa0"
+)
+EXPECTED_INVENTORY_SHA256 = (
+    "efa0a0b857d184dccdecf6adafda5d646ec45bae91f01a15cd1165f9fe9ad6b3"
+)
+SOURCE_IDENTITIES = {
+    f"{DATASET_CONFIGURATION}/train-00000-of-00002.parquet": (
+        156_987_808,
+        "74da360f23826045b3e6ac6375411fdb15f003030aa74f2596ed08b857cb9212",
+    ),
+    f"{DATASET_CONFIGURATION}/train-00001-of-00002.parquet": (
+        157_088_770,
+        "ba090ac30dbf5461e8dcbdd1a1b8e6f3cf9c2c756d64f0c1220450acd514f720",
+    ),
+    f"{DATASET_CONFIGURATION}/validation-00000-of-00001.parquet": (
+        657_209,
+        "204929b7ff9d6184953f867dedb860e40aa69c078fc1e54b3baaa8fb28511c4c",
+    ),
+    f"{DATASET_CONFIGURATION}/test-00000-of-00001.parquet": (
+        732_610,
+        "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91",
+    ),
+}
+
+
+def atomic_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_array(path: Path, array: np.ndarray) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    contiguous = np.ascontiguousarray(array)
+    with path.open("wb") as handle:
+        contiguous.tofile(handle)
+    return array_file_record(path, contiguous, path.parents[1])
+
+
+def download_sources(cache_root: Path) -> dict[str, list[Path]]:
+    cache_root.mkdir(parents=True, exist_ok=True)
+    resolved: dict[str, list[Path]] = {}
+    for split, names in SOURCE_FILES.items():
+        resolved[split] = []
+        for name in names:
+            expected_bytes, expected_sha256 = SOURCE_IDENTITIES[name]
+            path = cache_root / Path(name).name
+            if not (
+                path.is_file()
+                and path.stat().st_size == expected_bytes
+                and sha256_file(path) == expected_sha256
+            ):
+                temporary = path.with_suffix(path.suffix + ".part")
+                temporary.unlink(missing_ok=True)
+                url = (
+                    "https://huggingface.co/datasets/"
+                    f"{DATASET_REPOSITORY}/resolve/{DATASET_REVISION}/{name}"
+                )
+                urllib.request.urlretrieve(url, temporary)
+                if (
+                    temporary.stat().st_size != expected_bytes
+                    or sha256_file(temporary) != expected_sha256
+                ):
+                    temporary.unlink(missing_ok=True)
+                    raise RuntimeError(f"checksum mismatch for {name}")
+                os.replace(temporary, path)
+            resolved[split].append(path)
+    return resolved
+
+
+def verify_existing_output(output: Path) -> None:
+    manifest_path = output / "manifest.json"
+    double_build_path = output / "DOUBLE_BUILD.json"
+    if sha256_file(manifest_path) != EXPECTED_MANIFEST_SHA256:
+        raise RuntimeError("existing canonical WikiText manifest has the wrong hash")
+    if sha256_file(double_build_path) != EXPECTED_DOUBLE_BUILD_SHA256:
+        raise RuntimeError("existing canonical WikiText double-build record has the wrong hash")
+    data = CanonicalWikiTextData(manifest_path, passes=3)
+    if data.manifest["remote_payload"]["sha256"] != EXPECTED_PAYLOAD_SHA256:
+        raise RuntimeError("existing canonical WikiText payload identity changed")
+
+
+def serialize_split(
+    source_paths: list[Path],
+    *,
+    split: str,
+    destination: Path,
+) -> dict[str, Any]:
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError as error:
+        raise RuntimeError("install pyarrow in the local preparation environment") from error
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    rows = 0
+    with destination.open("wb") as output:
+        for source_path in source_paths:
+            parquet_file = parquet.ParquetFile(source_path)
+            if parquet_file.schema_arrow.names != ["text"]:
+                raise ValueError(f"unexpected {split} parquet schema: {source_path}")
+            for batch in parquet_file.iter_batches(columns=["text"], batch_size=16_384):
+                for value in batch.column(0).to_pylist():
+                    if not isinstance(value, str):
+                        raise ValueError(f"{split} contains a non-string row")
+                    encoded = value.encode("utf-8")
+                    output.write(encoded)
+                    if not encoded.endswith(b"\n"):
+                        output.write(b"\n")
+                    rows += 1
+    return {
+        "path": destination.name,
+        "rows": rows,
+        "bytes": destination.stat().st_size,
+        "sha256": sha256_file(destination),
+        "rule": (
+            "dataset row order; UTF-8; append one newline only when a row "
+            "does not already end in one"
+        ),
+    }
+
+
+def tokenize_split(
+    serialized: Path,
+    *,
+    split: str,
+    destination: Path,
+    encoding: Any,
+) -> tuple[dict[str, Any], int]:
+    text = serialized.read_text(encoding="utf-8")
+    tokens_native = encoding.encode_to_numpy(text)
+    del text
+    if len(tokens_native) != EXPECTED_TOKEN_COUNTS[split]:
+        raise ValueError(
+            f"{split} produced {len(tokens_native)} tokens; "
+            f"expected {EXPECTED_TOKEN_COUNTS[split]}"
+        )
+    if int(tokens_native.max()) >= VOCAB_SIZE or int(tokens_native.min()) < 0:
+        raise ValueError(f"{split} contains a token outside the GPT-2 vocabulary")
+    tokens = np.asarray(tokens_native, dtype="<u2")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as handle:
+        tokens.tofile(handle)
+
+    decoded_digest = hashlib.sha256()
+    decoded_bytes = 0
+    for start in range(0, len(tokens), 1_000_000):
+        block = encoding.decode_bytes(tokens[start : start + 1_000_000].tolist())
+        decoded_digest.update(block)
+        decoded_bytes += len(block)
+    if decoded_digest.hexdigest() != sha256_file(serialized):
+        raise ValueError(f"{split} token stream does not round-trip to its serialization")
+    if decoded_bytes != serialized.stat().st_size:
+        raise ValueError(f"{split} decoded byte count changed")
+    return (
+        {
+            "path": destination.relative_to(destination.parents[1]).as_posix(),
+            "bytes": destination.stat().st_size,
+            "sha256": sha256_file(destination),
+            "dtype": tokens.dtype.str,
+            "shape": [len(tokens)],
+        },
+        decoded_bytes,
+    )
+
+
+def payload_digest(root: Path, relative_paths: list[str]) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
+    for relative in sorted(relative_paths):
+        path = root / relative
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(str(path.stat().st_size).encode("ascii") + b"\0")
+        digest.update(sha256_file(path).encode("ascii") + b"\n")
     return digest.hexdigest()
 
 
-def write_json(path: Path, value: dict) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-
-
-def record(path: Path, *, dtype: str | None = None, shape: tuple[int, ...] | None = None) -> dict:
-    value = {"path": path.name, "bytes": path.stat().st_size, "sha256": sha256(path)}
-    if dtype is not None:
-        value["dtype"] = dtype
-    if shape is not None:
-        value["shape"] = list(shape)
-    return value
-
-
-def download(url: str, path: Path, size: int, digest: str) -> None:
-    if path.exists() and path.stat().st_size == size and sha256(path) == digest:
-        return
-    temporary = path.with_suffix(path.suffix + ".part")
-    urllib.request.urlretrieve(url, temporary)
-    if temporary.stat().st_size != size or sha256(temporary) != digest:
-        temporary.unlink(missing_ok=True)
-        raise RuntimeError(f"checksum mismatch for {path.name}")
-    temporary.replace(path)
-
-
-def write_corpus(paths: list[Path], output: Path) -> None:
-    with output.open("wb") as writer:
-        for path in paths:
-            parquet = pq.ParquetFile(path)
-            for batch in parquet.iter_batches(batch_size=8192, columns=["text"]):
-                for text in batch.column(0).to_pylist():
-                    encoded = (text or "").encode("utf-8")
-                    writer.write(encoded)
-                    if not encoded.endswith(b"\n"):
-                        writer.write(b"\n")
-
-
-def prepare_source(root: Path) -> Path:
-    shard_root = root / "source"
-    output = root / "wikitext103_byte_2048"
-    shard_root.mkdir(parents=True, exist_ok=True)
-    output.mkdir(parents=True, exist_ok=True)
-    source_records: dict[str, list[dict]] = {}
-    corpus_records: dict[str, dict] = {}
-    for split, rows in SHARDS.items():
-        paths = []
-        for name, size, digest in rows:
-            path = shard_root / name
-            download(f"{BASE_URL}/{name}", path, size, digest)
-            paths.append(path)
-        source_records[split] = [record(path) for path in paths]
-        corpus = output / f"wikitext103_{split}.utf8.bin"
-        write_corpus(paths, corpus)
-        corpus_records[split] = record(corpus, dtype="uint8", shape=(corpus.stat().st_size,))
-    train_offsets = np.random.default_rng(51_503).integers(
-        0,
-        corpus_records["train"]["bytes"] - 2_048 + 1,
-        size=(10_000, 32),
-        dtype=np.uint64,
-    )
-    train_offsets_path = output / "wikitext103_train_offsets_s51503_10000x32.uint64.bin"
-    train_offsets.tofile(train_offsets_path)
-    eval_offsets = {}
-    for split in ("validation", "test"):
-        count = min(512, corpus_records[split]["bytes"] // 2_048)
-        offsets = np.arange(count, dtype=np.uint64) * 2_048
-        path = output / f"wikitext103_{split}_offsets_{count}.uint64.bin"
-        offsets.tofile(path)
-        eval_offsets[split] = record(path, dtype="uint64", shape=(count,))
-    manifest = {
-        "format": "language_workspace_wikitext103_raw_v1",
-        "source_name": "WikiText-103 raw v1",
-        "source_shards": source_records,
-        "tokenization": "utf8_bytes",
-        "special_tokens": {"pad": 0, "cls": 1, "mask": 2, "byte_offset": 3},
-        "seq_len": 2_048,
-        "vocab_size": 259,
-        "stream_seed": 51_503,
-        "mask_seed": 81_719,
-        "mask_fraction": 0.15,
-        "steps": 10_000,
-        "batch_size": 32,
-        "corpora": corpus_records,
-        "train_offsets": record(
-            train_offsets_path,
-            dtype="uint64",
-            shape=train_offsets.shape,
-        ),
-        "eval_offsets": eval_offsets,
+def inventory(root: Path) -> dict[str, dict[str, Any]]:
+    return {
+        path.relative_to(root).as_posix(): {
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
     }
-    manifest_path = output / "manifest.json"
-    write_json(manifest_path, manifest)
-    if sha256(manifest_path) != EXPECTED_SOURCE_MANIFEST:
-        raise RuntimeError("generated source manifest does not match the experiment")
-    return manifest_path
 
 
-def tokenize(source: Path, output: Path, encoding: tiktoken.Encoding) -> int:
-    count = 0
-    pending = b""
-    with source.open("rb") as reader, output.open("wb") as writer:
-        while chunk := reader.read(8 << 20):
-            pending += chunk
-            boundary = pending.rfind(b"\n")
-            if boundary < 0:
-                continue
-            complete, pending = pending[: boundary + 1], pending[boundary + 1 :]
-            values = np.asarray(encoding.encode(complete.decode("utf-8"), disallowed_special=()), dtype=np.uint16)
-            writer.write(values.tobytes(order="C"))
-            count += len(values)
-        if pending:
-            values = np.asarray(encoding.encode(pending.decode("utf-8"), disallowed_special=()), dtype=np.uint16)
-            writer.write(values.tobytes(order="C"))
-            count += len(values)
-    return count
+def inventory_digest(records: dict[str, dict[str, Any]]) -> str:
+    return hashlib.sha256(
+        json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
-def windows(corpus_path: Path, count: int, output: Path, shape: tuple[int, ...], seed: int) -> None:
-    width = shape[-1]
-    rows = int(np.prod(shape[:-1]))
-    generator = np.random.default_rng(seed)
-    offsets = generator.integers(0, count - width + 1, size=rows, dtype=np.int64)
-    corpus = np.memmap(corpus_path, mode="r", dtype=np.uint16, shape=(count,))
-    target = np.memmap(output, mode="w+", dtype=np.uint16, shape=(rows, width))
-    positions = np.arange(width, dtype=np.int64)
-    chunk_rows = max(1, (64 << 20) // (width * 2))
-    for start in range(0, rows, chunk_rows):
-        stop = min(rows, start + chunk_rows)
-        target[start:stop] = corpus[offsets[start:stop, None] + positions[None, :]]
-    target.flush()
+def build_once(
+    source_paths: dict[str, list[Path]],
+    destination: Path,
+    *,
+    passes: int,
+    stream_seed: int,
+) -> dict[str, Any]:
+    if destination.exists():
+        raise FileExistsError(destination)
+    if passes <= 0:
+        raise ValueError("passes must be positive")
+    if stream_seed != STREAM_SEED:
+        raise ValueError(f"canonical stream seed must be {STREAM_SEED}")
+    destination.mkdir(parents=True)
 
-
-def prepare(root: Path) -> Path:
-    cached = root / "wikitext103_gpt2_causal_2048/manifest.json"
-    if cached.exists() and sha256(cached) == EXPECTED_MANIFEST:
-        manifest = json.loads(cached.read_text())
-        if all(
-            sha256(cached.parent / manifest["records"][split]["path"])
-            == EXPECTED_STREAMS[split]
-            for split in EXPECTED_STREAMS
-        ):
-            print(cached)
-            return cached
-    source_manifest = prepare_source(root)
-    source = json.loads(source_manifest.read_text())
-    output = root / "wikitext103_gpt2_causal_2048"
-    output.mkdir(parents=True, exist_ok=True)
+    try:
+        import pyarrow
+        import tiktoken
+    except ImportError as error:
+        raise RuntimeError(
+            "install pyarrow and tiktoken in the local preparation environment"
+        ) from error
     encoding = tiktoken.get_encoding("gpt2")
-    token_records = {}
-    token_counts = {}
+    if encoding.n_vocab != VOCAB_SIZE:
+        raise ValueError("GPT-2 vocabulary size changed")
+
+    source_records: dict[str, list[dict[str, Any]]] = {}
+    serialization: dict[str, Any] = {}
+    token_streams: dict[str, Any] = {}
+    decoded_bytes: dict[str, int] = {}
     for split in ("train", "validation", "test"):
-        corpus = source_manifest.parent / source["corpora"][split]["path"]
-        path = output / f"wikitext103_gpt2_{split}_tokens.uint16.bin"
-        token_counts[split] = tokenize(corpus, path, encoding)
-        token_records[split] = record(path, dtype="uint16", shape=(token_counts[split],))
-    specifications = (
-        ("train", (4000, 8, 2049), 61_907),
-        ("validation", (128, 2049), 10_061_907),
-        ("test", (128, 2049), 20_061_907),
+        source_records[split] = []
+        copied_sources = []
+        for source_path, repository_name in zip(
+            source_paths[split],
+            SOURCE_FILES[split],
+            strict=True,
+        ):
+            copied = destination / "source_shards" / repository_name
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, copied)
+            copied_sources.append(copied)
+            source_records[split].append(
+                {
+                    "repository_path": repository_name,
+                    "path": copied.relative_to(destination).as_posix(),
+                    "bytes": copied.stat().st_size,
+                    "sha256": sha256_file(copied),
+                }
+            )
+        serialized = destination / "serialized" / f"{split}.txt"
+        serialization[split] = serialize_split(
+            copied_sources,
+            split=split,
+            destination=serialized,
+        )
+        serialization[split]["path"] = serialized.relative_to(destination).as_posix()
+        token_path = destination / "tokens" / f"{split}.uint16.bin"
+        token_streams[split], decoded_bytes[split] = tokenize_split(
+            serialized,
+            split=split,
+            destination=token_path,
+            encoding=encoding,
+        )
+
+    byte_lengths = np.asarray(
+        [len(encoding.decode_single_token_bytes(index)) for index in range(VOCAB_SIZE)],
+        dtype="<u2",
     )
-    stream_records = {}
-    for split, shape, seed in specifications:
-        path = output / f"wikitext103_gpt2_{split}_stream.uint16.bin"
-        windows(output / token_records[split]["path"], token_counts[split], path, shape, seed)
-        stream_records[split] = record(path, dtype="uint16", shape=shape)
-        if stream_records[split]["sha256"] != EXPECTED_STREAMS[split]:
-            raise RuntimeError(f"generated {split} stream does not match the released experiment")
+    byte_length_path = destination / "tokenizer" / "gpt2_token_byte_lengths.uint16.bin"
+    byte_length_record = write_array(byte_length_path, byte_lengths)
+
+    train_starts, train_targets = build_training_index(EXPECTED_TOKEN_COUNTS["train"])
+    permutations = build_pass_permutations(
+        len(train_starts),
+        passes,
+        stream_seed,
+    )
+    coverage = validate_training_index(
+        train_starts,
+        train_targets,
+        permutations,
+        token_count=EXPECTED_TOKEN_COUNTS["train"],
+    )
+    if coverage["records_per_pass"] != TRAIN_RECORDS_PER_PASS:
+        raise ValueError("canonical training record count changed")
+    if coverage["targets_per_pass"] != TRAIN_TARGETS_PER_PASS:
+        raise ValueError("canonical training target count changed")
+
+    indexes_root = destination / "indexes"
+    starts_path = indexes_root / "train_starts.uint64.bin"
+    targets_path = indexes_root / "train_target_counts.uint16.bin"
+    starts_record = write_array(starts_path, train_starts)
+    targets_record = write_array(targets_path, train_targets)
+    permutation_records = []
+    for pass_index, permutation in enumerate(permutations):
+        path = indexes_root / f"train_pass_{pass_index:03d}_record_ids.uint32.bin"
+        record = write_array(path, permutation)
+        record["pass_index"] = pass_index
+        record["records"] = len(permutation)
+        record["scored_targets"] = int(train_targets[permutation].sum(dtype=np.uint64))
+        permutation_records.append(record)
+
+    evaluation_records: dict[str, dict[str, Any]] = {}
+    evaluation_splits: dict[str, Any] = {}
+    for split in ("validation", "test"):
+        starts, lengths, offsets, counts = build_evaluation_index(
+            EXPECTED_TOKEN_COUNTS[split]
+        )
+        audit = validate_evaluation_index(
+            starts,
+            lengths,
+            offsets,
+            counts,
+            token_count=EXPECTED_TOKEN_COUNTS[split],
+        )
+        records = {}
+        for name, array, suffix in (
+            ("starts", starts, "uint64"),
+            ("token_lengths", lengths, "uint16"),
+            ("score_offsets", offsets, "uint16"),
+            ("target_counts", counts, "uint16"),
+        ):
+            path = indexes_root / f"{split}_{name}.{suffix}.bin"
+            records[name] = write_array(path, array)
+        stream_path = destination / token_streams[split]["path"]
+        stream = np.memmap(
+            stream_path,
+            mode="r",
+            dtype=np.dtype(token_streams[split]["dtype"]),
+            shape=tuple(token_streams[split]["shape"]),
+        )
+        scored_bytes = int(byte_lengths[np.asarray(stream[1:], dtype=np.uint16)].sum(dtype=np.uint64))
+        if scored_bytes != decoded_bytes[split] - int(byte_lengths[int(stream[0])]):
+            raise ValueError(f"{split} scored byte accounting changed")
+        evaluation_records[split] = records
+        evaluation_splits[split] = {
+            **audit,
+            "scored_bytes": scored_bytes,
+            "first_token_context_only": True,
+        }
+
+    remote_paths = sorted(
+        path.relative_to(destination).as_posix()
+        for path in destination.rglob("*")
+        if path.is_file()
+        and path.relative_to(destination).as_posix().startswith(REMOTE_PAYLOAD_PREFIXES)
+    )
+    remote_sha = payload_digest(destination, remote_paths)
+    warmup_steps = round(passes * OPTIMIZER_STEPS_PER_PASS * 0.025)
+    checkpoint_steps = sorted(
+        {
+            (OPTIMIZER_STEPS_PER_PASS + 1) // 2,
+            *(
+                pass_index * OPTIMIZER_STEPS_PER_PASS
+                for pass_index in range(1, passes + 1)
+            ),
+        }
+    )
     manifest = {
-        "format": "wikitext103_gpt2_causal_windows_v1",
-        "source": "WikiText-103 raw v1",
-        "source_url": "https://blog.einstein.ai/the-wikitext-long-term-dependency-language-modeling-dataset/",
-        "source_manifest": {
-            "path": "../wikitext103_byte_2048/manifest.json",
-            "sha256": sha256(source_manifest),
+        "schema_version": 1,
+        "format": FORMAT,
+        "protocol_id": PROTOCOL_ID,
+        "dataset": {
+            "repository": DATASET_REPOSITORY,
+            "configuration": DATASET_CONFIGURATION,
+            "revision": DATASET_REVISION,
+            "official_split_roles": ["train", "validation", "test"],
+            "source_files": source_records,
         },
-        "tokenization": "tiktoken:gpt2",
-        "tokenizer_vocab_size": encoding.n_vocab,
-        "storage_dtype": "uint16",
-        "seq_len": 2048,
-        "steps": 4000,
-        "batch_size": 8,
-        "eval_sequences": 128,
-        "stream_seed": 61_907,
-        "tokenized_corpora": token_records,
-        "records": stream_records,
+        "serialization": {
+            "encoding": "UTF-8",
+            "splits": serialization,
+        },
+        "tokenizer": {
+            "id": TOKENIZER_ID,
+            "encoding": "gpt2",
+            "vocabulary_size": VOCAB_SIZE,
+            "package": "tiktoken",
+            "package_version": metadata.version("tiktoken"),
+            "byte_lengths": byte_length_record,
+        },
+        "token_streams": token_streams,
+        "training": {
+            "objective": "causal_next_token_prediction",
+            "context_length": CONTEXT_LENGTH,
+            "record_tokens": CONTEXT_LENGTH + 1,
+            "records_per_pass": TRAIN_RECORDS_PER_PASS,
+            "scored_targets_per_pass": TRAIN_TARGETS_PER_PASS,
+            "passes": passes,
+            "total_target_presentations": TRAIN_TARGETS_PER_PASS * passes,
+            "effective_batch_records": EFFECTIVE_BATCH_RECORDS,
+            "optimizer_steps_per_pass": OPTIMIZER_STEPS_PER_PASS,
+            "total_optimizer_steps": OPTIMIZER_STEPS_PER_PASS * passes,
+            "warmup_steps_at_2_5_percent": warmup_steps,
+            "stream_seed": stream_seed,
+            "permutation_generator": "numpy.PCG64; sequential permutation per pass",
+            "replacement_sampling": False,
+            "reset_state_at_record_boundary": True,
+            "final_partial_record_retained": True,
+            "padding_excluded_from_loss": True,
+            "index": {
+                "starts": starts_record,
+                "target_counts": targets_record,
+            },
+            "permutations": permutation_records,
+            "checkpoint_steps": checkpoint_steps,
+            "coverage_audit": coverage,
+        },
+        "evaluation": {
+            "context_length": CONTEXT_LENGTH,
+            "stride": EVALUATION_STRIDE,
+            "score_each_transition_once": True,
+            "reset_state_at_window_boundary": True,
+            "indexes": evaluation_records,
+            "splits": evaluation_splits,
+        },
+        "remote_payload": {
+            "files": remote_paths,
+            "sha256": remote_sha,
+        },
+        "build_environment": {
+            "numpy": np.__version__,
+            "pyarrow": pyarrow.__version__,
+            "tiktoken": metadata.version("tiktoken"),
+        },
     }
-    manifest_path = output / "manifest.json"
-    write_json(manifest_path, manifest)
-    if sha256(manifest_path) != EXPECTED_MANIFEST:
-        raise RuntimeError("generated manifest does not match the released experiment")
-    print(manifest_path)
-    return manifest_path
+    atomic_json(destination / "manifest.json", manifest)
+    return manifest
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "runs/data/wikitext103_gpt2_causal_t2048_coverage_v1",
+    )
+    parser.add_argument(
+        "--download-cache",
+        type=Path,
+        default=ROOT / "runs/data/downloads/wikitext103",
+    )
+    parser.add_argument("--passes", type=int, default=3)
+    parser.add_argument("--stream-seed", type=int, default=STREAM_SEED)
+    args = parser.parse_args()
+    output = args.output if args.output.is_absolute() else ROOT / args.output
+    cache = (
+        args.download_cache
+        if args.download_cache.is_absolute()
+        else ROOT / args.download_cache
+    )
+    os.environ.setdefault(
+        "TIKTOKEN_CACHE_DIR",
+        str(ROOT / "runs/data/downloads/tiktoken"),
+    )
+    if output.exists() or output.is_symlink():
+        if not output.is_dir() or output.is_symlink():
+            raise FileExistsError(f"canonical payload path is not a directory: {output}")
+        verify_existing_output(output)
+        print(output)
+        return
+    cache.mkdir(parents=True, exist_ok=True)
+    sources = download_sources(cache)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    first = Path(tempfile.mkdtemp(prefix=f".{output.name}.build-a-", dir=output.parent))
+    second = Path(tempfile.mkdtemp(prefix=f".{output.name}.build-b-", dir=output.parent))
+    first.rmdir()
+    second.rmdir()
+    promoted = False
+    try:
+        first_manifest = build_once(
+            sources,
+            first,
+            passes=args.passes,
+            stream_seed=args.stream_seed,
+        )
+        second_manifest = build_once(
+            sources,
+            second,
+            passes=args.passes,
+            stream_seed=args.stream_seed,
+        )
+        first_inventory = inventory(first)
+        second_inventory = inventory(second)
+        if first_inventory != second_inventory:
+            changed = sorted(set(first_inventory) | set(second_inventory))
+            changed = [
+                name
+                for name in changed
+                if first_inventory.get(name) != second_inventory.get(name)
+            ]
+            raise RuntimeError(f"deterministic builds differ: {changed}")
+        if first_manifest != second_manifest:
+            raise RuntimeError("deterministic manifests differ")
+        tree_sha = inventory_digest(first_inventory)
+        attestation = {
+            "schema_version": 1,
+            "status": "byte_identical_double_build",
+            "builds": 2,
+            "inventory_sha256": tree_sha,
+            "manifest_sha256": sha256_file(first / "manifest.json"),
+            "remote_payload_sha256": first_manifest["remote_payload"]["sha256"],
+            "files": len(first_inventory),
+            "protocol_id": PROTOCOL_ID,
+            "passes": args.passes,
+            "stream_seed": args.stream_seed,
+        }
+        if attestation["manifest_sha256"] != EXPECTED_MANIFEST_SHA256:
+            raise RuntimeError("generated canonical WikiText manifest identity changed")
+        if attestation["remote_payload_sha256"] != EXPECTED_PAYLOAD_SHA256:
+            raise RuntimeError("generated canonical WikiText payload identity changed")
+        if tree_sha != EXPECTED_INVENTORY_SHA256:
+            raise RuntimeError("generated canonical WikiText inventory identity changed")
+        atomic_json(first / "DOUBLE_BUILD.json", attestation)
+        if sha256_file(first / "DOUBLE_BUILD.json") != EXPECTED_DOUBLE_BUILD_SHA256:
+            raise RuntimeError("generated canonical WikiText double-build identity changed")
+        os.replace(first, output)
+        promoted = True
+        print(json.dumps(attestation, indent=2, sort_keys=True))
+    finally:
+        if not promoted and first.exists():
+            shutil.rmtree(first)
+        if second.exists():
+            shutil.rmtree(second)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=Path("runs/data"))
-    prepare(parser.parse_args().output_root.resolve())
+    main()

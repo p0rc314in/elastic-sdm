@@ -1,69 +1,105 @@
 {
-  "schema_version": 4,
+  "schema_version": 7,
   "source_scratch": {
     "repository": "elastic-sdm-research",
     "commit": "82182637aa28a3a46ab1bbac5ef5f494c5f927fe",
-    "extracted_at": "2026-08-17"
+    "extracted_at": "2026-08-19"
   },
   "implementation": {
     "upstream_semantic_reference": {
       "repository": "https://github.com/facebookresearch/sparse-delta-memory",
       "revision": "183e7df809131b80ad4393741029d0f20fc3640b"
     },
+    "vendored_source_manifest_sha256": "0e38e1197ae6526492240c7a381a8bf94cdd704686cb1c05006fdfa6b92656d3",
     "shape": {
       "layout": "BBBBBBBA",
       "width": 128,
       "attention_heads": 4,
       "memory_heads": 1,
-      "slots_per_memory_layer": 1024,
+      "slots_per_memory_layer": [
+        1024,
+        2304
+      ],
       "reads": 16,
-      "writes": 16,
-      "seed": 0
+      "writes": 16
     }
   },
   "data": {
-    "wikitext_source_manifest_sha256": "f63c7418b844f94cea26782901820b8635edfe362ad193eea79dbabbc80880dd",
-    "wikitext_manifest_sha256": "b1bb41b7bc8f9c1fe4bb22820e6d242d67d4cc143f3763c371ff6ea6e6fd987d",
-    "wikitext_stream_sha256": {
-      "train": "567edc62db7882f2c69176215db23ba06c3b8443f4bf9363d9e0f89aa7fcb316",
-      "validation": "05a6519598fb6bb77a8541933fd2a7cd69db8fd5ad33dadd57ce686dcf7752d4",
-      "test": "56f9ff70776a35d689644535eb9b1b02eb3c3e7fb4df0c8a84d47b0fb5bde13f"
+    "wikitext_protocol_id": "wikitext103-gpt2-causal-t2048-coverage-v1",
+    "wikitext_dataset": {
+      "repository": "Salesforce/wikitext",
+      "configuration": "wikitext-103-raw-v1",
+      "revision": "5fddba447aa4e75996922ea0d6b18b42f0a81cc4",
+      "source_shards_sha256": {
+        "train_0": "74da360f23826045b3e6ac6375411fdb15f003030aa74f2596ed08b857cb9212",
+        "train_1": "ba090ac30dbf5461e8dcbdd1a1b8e6f3cf9c2c756d64f0c1220450acd514f720",
+        "validation": "204929b7ff9d6184953f867dedb860e40aa69c078fc1e54b3baaa8fb28511c4c",
+        "test": "5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91"
+      }
+    },
+    "wikitext_manifest_sha256": "fc4ef13cbc38070f2d7774dffbfd5be48cab31fe45d6d9995d522fc3bac1dde6",
+    "wikitext_payload_sha256": "f430ce52a43a44b88f5a8ec1ec5882866daaa568595bfbd6b765e3369586f85e",
+    "wikitext_double_build_sha256": "888d5d27b8086223d48b2347364428947603ab4400a0b7c594d9b350baca7aa0",
+    "wikitext_loader_sha256": "32d204f4f4ad64b9cd1c35a1b1e84680effb515269fa830be0093eca6416692b",
+    "wikitext_training": {
+      "passes": 3,
+      "optimizer_steps": 21603,
+      "scored_targets_per_pass": 117980449,
+      "target_presentations": 353941347,
+      "replacement_sampling": false,
+      "stream_seed": 20260818,
+      "evaluation_stride": 512,
+      "validation_scored_targets": 247416,
+      "test_scored_targets": 283426
     },
     "recall_manifest_sha256": "b0587d62c3ab709c94e37742892451a39463a7d577212b9379bd76d966f97800",
     "recall_stream_seed": 102337
   },
   "campaigns": {
     "recall": {
-      "billed_gpu_hours": 23.827531476666664,
-      "billed_cost_usd": 36.85137508551111,
+      "billed_gpu_hours": 29.599869756944443,
+      "billed_cost_usd": 46.02939295115277,
+      "billing_scope": "Complete source campaigns; the grid campaign also contains two scratch-only diagnostic arms.",
       "results": {
-        "native_sdm_rw16_price000": {
+        "native_sdm_n1024_rw16_price000": {
+          "source_arm": "native_sdm_rw16_price000",
           "archive_sha256": "4599994a756fd0e83ca8ef406409579ac28e60f5c2f351215ec1981103d661b0",
           "result_json_sha256": "440cffcd5ac56fb4b3547199630964bba417f794befb3ee3c1dc922b07f69e4e"
         },
-        "native_sdm_rw16_price0012": {
-          "archive_sha256": "01e95305283a50e985e89b39e1e0ecddf0dd218c3563066f7311ca4d85db45a0",
-          "result_json_sha256": "e4648be39faa6fb530a60aa0d2ed7e218fe87f69530f245ecae4efd5aa0a5f6e"
-        },
-        "native_sdm_rw16_price0024": {
+        "native_sdm_n1024_rw16_price0024": {
+          "source_arm": "native_sdm_rw16_price0024",
           "archive_sha256": "2bd5f59266d8fd431ed1c508e930f5697503ed05b723cc0bf96908c533ec2122",
           "result_json_sha256": "9a04c753effc2fd18c4b6679bfe465ff51b29e2e7d212f8d5f66128071459900"
         },
-        "native_sdm_rw16_price0040": {
-          "archive_sha256": "381ff98ec1e2dc0bbd2b7686e190fb11877040f18d517cfc203e0cb8191433bb",
-          "result_json_sha256": "cffcbf5007d9d0940ff83fef96fe16ad5d4c876e70f92af059ccc36afcac4733"
-        },
-        "native_sdm_rw16_price012": {
+        "native_sdm_n1024_rw16_price012": {
+          "source_arm": "native_sdm_rw16_price012",
           "archive_sha256": "99b6bb61bd0d9ba17d793c95567c72752179104e90ed5f94fdc07afc570a873f",
           "result_json_sha256": "d7543f84c0fa2a22c650e15f04ed5db56cf20b25c519f67c248246ddfe3d2e72"
         },
-        "native_sdm_rw16_price0240": {
+        "native_sdm_n1024_rw16_price0240": {
+          "source_arm": "native_sdm_rw16_price0240",
           "archive_sha256": "875b67112cb4ede90669ab576f20de8ed21583cbd6cfbef66f9eda39a00c2386",
           "result_json_sha256": "432b6d8fde8fad3c19dd0e9b168fe543aea35e989672894c50d9a8a21f21c71b"
         },
-        "native_sdm_rw16_price0400": {
+        "native_sdm_n1024_rw16_price0400": {
+          "source_arm": "native_sdm_rw16_price0400",
           "archive_sha256": "4095bd7acc9eb8917b567db7dfec09011794ff88eaa891579877e9c261dff665",
           "result_json_sha256": "80516039f365132706a1e99d21c6fd2dc621adae72ef2f8c5e378f5c327d2721"
+        },
+        "native_sdm_n2304_rw16_price000": {
+          "source_arm": "sdm_n2304_rw16_p000_s0",
+          "archive_sha256": "af742af364715f0e26517b9ea22bf00956c3f4db51b9e8ebb4a37c96a51ab69d",
+          "result_json_sha256": "0833cd2cbbd7ad3092536b94eff5769476c97cb96b4613e898c05930941cada1"
+        },
+        "native_sdm_n2304_rw16_price0054": {
+          "source_arm": "sdm_n2304_rw16_p0054_s0",
+          "archive_sha256": "f151c06599fd8f456cc1dce3c2b08ce3530924ec3f6fffe9b6c80c5366e63baa",
+          "result_json_sha256": "4866704c403db050b0c1f967aece139608643aeb56338600221ec021cbda7b2e"
+        },
+        "native_sdm_n2304_rw16_price027": {
+          "source_arm": "sdm_n2304_rw16_p0270_s0",
+          "archive_sha256": "8ef17e2c5a9df4646de2d4e0fe3f4d37f6807a2fb4bbb559a4fa5100958bd066",
+          "result_json_sha256": "afb21a70bfe3f45927d88db73d1bf0947c0c13c44056ba8ba6d12c884e6e5b1a"
         }
       },
       "runs": [
@@ -77,9 +113,9 @@
           "hourly_rate_usd": 1.49,
           "billed_cost_usd": 15.412559439594443,
           "arms": [
-            "native_sdm_rw16_price000",
-            "native_sdm_rw16_price0024",
-            "native_sdm_rw16_price012"
+            "native_sdm_n1024_rw16_price000",
+            "native_sdm_n1024_rw16_price0024",
+            "native_sdm_n1024_rw16_price012"
           ]
         },
         {
@@ -92,68 +128,130 @@
           "hourly_rate_usd": 1.59,
           "billed_cost_usd": 21.438815645916666,
           "arms": [
+            "native_sdm_n1024_rw16_price0240",
+            "native_sdm_n1024_rw16_price0400"
+          ],
+          "source_campaign_other_arms": [
             "native_sdm_rw16_price0012",
-            "native_sdm_rw16_price0040",
-            "native_sdm_rw16_price0240",
-            "native_sdm_rw16_price0400"
+            "native_sdm_rw16_price0040"
+          ]
+        },
+        {
+          "id": "esdm-native-n2304-rw16-price-recall-capacity-seed0-v3",
+          "source_result_root": "results/native-sdm-n2304-rw16-price-recall-capacity-seed0-v3",
+          "source_archive_sha256": "be283e3d12db6ede5f8edc39e829ab2a7e3de35aa51f54e99891d4dc03b8a468",
+          "spec_sha256": "7391087ec669f11687a5e85f61bc3ac026fdccebeee19b7e18bc3cbb2ebcb211",
+          "accelerator": "NVIDIA A100-SXM4-80GB",
+          "billed_gpu_hours": 5.772338280277777,
+          "hourly_rate_usd": 1.59,
+          "billed_cost_usd": 9.178017865641667,
+          "arms": [
+            "native_sdm_n2304_rw16_price000",
+            "native_sdm_n2304_rw16_price0054",
+            "native_sdm_n2304_rw16_price027"
           ]
         }
       ]
     },
     "language": {
-      "billed_gpu_hours": 5.036126,
-      "billed_cost_usd": 8.00744034,
+      "billed_gpu_hours": 66.64167861805555,
+      "billed_cost_usd": 99.29610114090276,
+      "billing_scope": "Five exact source pods from allocation through confirmed deletion.",
       "results": {
         "native_sdm_rw16_price000": {
-          "archive_sha256": "39403f11276258e77cf40c7f19167032e4e28701074ca69f201bbe59231fd3c5",
-          "result_json_sha256": "bdf18cfb5a50d8faea362a1410faec9d8f3188a0b58d249c87722cbdcc4f967e"
+          "source_arm": "native_price000",
+          "archive_sha256": "c04ba0449f09900e7172e4716ca66271c451c18630068bb118bb497dd03db0c7",
+          "result_json_sha256": "56698e63f0a5ef76b9322dfd46528c41a5219d4d3eb734b14a3b1cbe49c07412",
+          "trained_occupancy_sha256": "8883e1781f67f90a1ededdbffdfef3d4f8940ca60bd3e0256e617d418c7454dd"
         },
         "native_sdm_rw16_price0024": {
-          "archive_sha256": "c6154a86dd6db5c03061cffa8f6be96cec12428fec0b35f2f6eef6bc1d382e57",
-          "result_json_sha256": "9b72d04a8c8900d20cd5ec6110a6cdd4d484551eddbfb44bb226eb49104c5383"
+          "source_arm": "native_price0024",
+          "archive_sha256": "3d6d2a982b874b86901626bef8bdd94d7a66c7b220307f83837993b612e0364c",
+          "result_json_sha256": "cacce74c7a1ce8181438d79de85b1089f43223d564d6096bc4d86048e9af121a",
+          "trained_occupancy_sha256": "c8420e98c2d127e2aa502a3d67b47c9af1edd091cad71937c298c5d1b49a36ae"
+        },
+        "native_sdm_rw16_price012": {
+          "source_arm": "native_price012",
+          "archive_sha256": "e222b9b9bc01cd8d1980fffadd8209148684f40ecb175869f0023110dc6b9e00",
+          "result_json_sha256": "3993fd3479b0a41bda60feb3acded40128e11104a1709c6b627ee3a3d011e828",
+          "trained_occupancy_sha256": "0765514c3f6652c5a6d23fa312558a1a1689590c76a4f166ea6fa9a0bfc576cb"
+        },
+        "native_sdm_rw16_price0240": {
+          "source_arm": "native_price0240",
+          "archive_sha256": "e299c512656d72b47d414ab7733860b8cd21289aa9792f6f5424b27483f79b9e",
+          "result_json_sha256": "9f2bc42417e79e44a4d6f4a1ae13b5b65cba86376a16f3c96fdbcdb270f67a76",
+          "trained_occupancy_sha256": "d0cdd8e8cc7483e07eb13e573ee8b2345334b48552b5cf700f59149d4410cff7"
+        },
+        "native_sdm_rw16_price0400": {
+          "source_arm": "native_price0400",
+          "archive_sha256": "ddb2e6efa2ed9a4279d3704bfd3db83c171bdda0cf501601a5f236b629ce3527",
+          "result_json_sha256": "b7c14443857bd2373d1ff7e788369a6e39a1be9a5ea0d45cc3289aa395ca5eae",
+          "trained_occupancy_sha256": "8f979fbcfd718d62b8368edccfa60ed1074dd482a709fc7fa421679f32e5e6d0"
         }
       },
       "runs": [
         {
-          "id": "esdm-native-n1024-rw16-price-wikitext-seed0-v1",
-          "source_result_root": "results/native-sdm-n1024-rw16-price-wikitext-seed0-v1",
-          "source_archive_sha256": "316c11f9b37b7187331693dc79f5cf02bb02d6ef1230c240367d11ad001be8c0",
-          "spec_sha256": "62c0378770d31b8eaa53506290044f36e8c7590319e57108807c0db6b0148011",
+          "id": "esdm-wt103-n1024-rw16-price-s0-v1",
+          "source_result_root": "results/native-sdm-wikitext-coverage-seed0-v1",
+          "source_archive_sha256": "ec7874da8ee48d5cb10ed7b9d25e11f592b71ef12ee238cac73c1844682d2918",
+          "spec_sha256": "506721bf5dce05442b7c34617d595123eef1cdef3735eff112745755886cfde1",
           "accelerator": "NVIDIA A100-SXM4-80GB",
-          "billed_gpu_hours": 5.036126,
-          "hourly_rate_usd": 1.59,
-          "billed_cost_usd": 8.00744034,
+          "runtime": {
+            "torch": "2.8.0+cu128",
+            "triton": "3.4.0"
+          },
+          "billed_gpu_hours": 66.64167861805555,
+          "hourly_rate_usd": 1.49,
+          "billed_cost_usd": 99.29610114090276,
           "arms": [
             "native_sdm_rw16_price000",
-            "native_sdm_rw16_price0024"
+            "native_sdm_rw16_price0024",
+            "native_sdm_rw16_price012",
+            "native_sdm_rw16_price0240",
+            "native_sdm_rw16_price0400"
           ]
         }
       ]
     }
   },
   "released_sources": {
+    "LICENSE": "9944ca176e97bd622088262822ced605fcfdcd6e2a879abf4c6a1874d9cb4d01",
+    "THIRD_PARTY.md": "f7ef684a6992007c2b56b4609879ab7e0ee6e23cd8aef895e57f5b71dd732c84",
     "PROJECT_IDENTITY.json": "b7ba565164ea8f2b8ea15566a91ecdc973ab1fa1d79aa023cec11f436115205e",
     "elastic_sdm/__init__.py": "17fea469eec26323f2a444ae45c6355e7c0cbe0e5c198f7563457dcf4268d948",
     "elastic_sdm/allocator.py": "3361b15782c7ce680c0f0184a0b072dfea77e2fef60bb44eb723e81ef829d268",
     "elastic_sdm/model.py": "b355f4661dd2356e7bf2a43de00019958cf47ed8dc423a6b187c20a4616a243e",
-    "elastic_sdm/sdm.py": "0f58623b6629c2c75554077dad21432f00d9c5b142aa2adcd37651438b9d5f63",
+    "elastic_sdm/sdm.py": "820d1fb2bf995fdf6fed1af244f8aeebf04056e13894d3db1f0136bc5239e5c1",
     "benchmarks/prepare_recall_suite.py": "fbb8293b5fb1551ece712ce2c5b4c7fea40cd19e3dca0895534f069b2e2defeb",
-    "benchmarks/train_recall_cuda.py": "9d4957c02e7944d72035b2f7047ab0428f56ac0b1e866be1cbcb3a213f12805a",
-    "benchmarks/train_wikitext_cuda.py": "555263d4ec4dfed4772eaa792034d46e16945653a6041e084a7dc4cf8bf234a8",
-    "scripts/prepare_wikitext.py": "b4ecad16d93732731cb8d6cb3c760d63720f55da4569b8e94f27a5bc420af411",
-    "scripts/run_experiments.py": "d3c2e1057f72f0fd3ab8c1818c8cbfc7df0c406c63c96bae04cf909ac1b66e55",
-    "scripts/check_results.py": "2b80727de7f3e43f0866bc7cfa5213609a65d460a2c644005eb7d58ecd88bb77",
-    "scripts/verify_results.py": "12e8edf284424e758f61613282e9f5b6b59757d74d9d0adf01ed787338410b12",
-    "reproduce.sh": "aed1cf30b57b01acde9eb32fe0ba36c43f8403466ed43fb00f76b42f5b469ab8",
-    "pyproject.toml": "01f002161b46323de4e3ed81b387e01f473f9142083ab762dfcfb8dc31f46f12",
-    "uv.lock": "8927fb5d256e90b16ffaba30ebd1b4ccaff8eb9bd81249e0b333161640f6c99a"
+    "benchmarks/train_recall_cuda.py": "b438adb867df2b6130b44cb1d540fff05ab201d530e3964b8a33440101256455",
+    "benchmarks/train_wikitext_coverage_cuda.py": "f1a90134b241e445c372f05d4520b43096456a562ae6e3b3110db94a6e28087c",
+    "benchmarks/wikitext103_coverage.py": "32d204f4f4ad64b9cd1c35a1b1e84680effb515269fa830be0093eca6416692b",
+    "benchmarks/wikitext_support.py": "500ba04b070179ca89bbab5c3d497ae68ef764e9298ab32c9bbdb74d8e8ab5e9",
+    "scripts/prepare_wikitext.py": "1f5c0c24bdbc3adebe9abc9807ba5bf8aeef38a747f9ecc11d6f8deaed071551",
+    "scripts/build_released_sdm_extensions.py": "78f85c94acbf7d609f8b6383f8585d497630c94ce10dca93db44422c94114beb",
+    "scripts/run_experiments.py": "1b1178f66df7ffc39ce9aa09ae9d71279cb8b39110eadb6a9b2a8f198eb3e7f8",
+    "scripts/check_results.py": "25e14705d672aed6449a25a5ca5faf71215f85bca15950529c8aee2f3d482715",
+    "scripts/verify_results.py": "fc18d5c04239e0c58c81c915ddc578fe98bed2306f66dd21cdac5977c36e8101",
+    "reproduce.sh": "69c8613e53a24961e255779736360f61163cb4021b449c5c1a019c0ceba31709",
+    "pyproject.toml": "950ebc94596eff787e53cb51b72ae31740a18328958da6284bdeeb9ee13e2ea3",
+    "uv.lock": "bb0e37eaff7c347021880892e4f61a1db01d2277a0ce162b15bcf062ef11271f",
+    "third_party/released_sdm/SOURCE.json": "1874356173ad110118c4bd50da725fd5a863ce91bb4849c6853d32eb8dd95833",
+    "third_party/released_sdm/LICENSE": "3711f963c05d0be80d53e5923308a6dee31b203da23435c9cfb7c7b6e4dd5e19"
   },
   "included_measurements": {
-    "data/recall_curve.csv": "074d16d666a33f24f702b06216580b3ec56a4e5daad89c13bd6084df2c0fd3a8",
-    "data/language_curve.csv": "ff60a66d4f14bfe42764329bf3f93b00cfe2e3ae7bc55c3570bc8a920ab09b80"
+    "data/recall_curve.csv": "044d1275f5e1826df4f7087b68f9f6a039d6f68795433fd1d453c45be96488f1",
+    "data/recall_price_curve.csv": "dd053bf6ae3277104fbb324c694938e7a8385d701ec022d68da20204046dddaa",
+    "data/language_curve.csv": "50eb79673ea878499ded2d4e387e461c0882eb35226cd8b9a916770cc3a4cbf9"
   },
   "included_figures": {
-    "figures/frontier.png": "c3a520605425b63d8f43e274a0a8ac13350c7f6cc1022bb24bed720dc87c7d19",
+    "figures/frontier.png": "c21fa1d85a1698f718cf541a00d9f1454c28d124ed922ab257d15b8ac1d7669f",
+    "figures/capacity-growth.png": "dec95740040176b4782a70c91512b47e560c4a3dfcae3a8f7a538efa81d2cf16",
     "figures/social-preview.png": "8ab9803d78d909975629b92c76ef74d524b60d4b358b8c1dba41f706ce51f005"
+  },
+  "released_documents": {
+    "README.md": "10f4b5a771b57e282231c3cdde56723753350d55055ebe3af7eb3babb9c7bf9f",
+    "APPENDIX.md": "ab81ae8cafe303f3956b64e34135ef2e9b58dbe74f66c83b83c9dacd233f4f11",
+    "REPRODUCING.md": "c53847d76ade7eb1a25c6a3f4d228b2e6ef50b6bdf48b91e546563be23cdf780",
+    "CITATION.cff": "aab440317a415a4a5954163c7dea2ce2c2aa6891269217fbaf7e9720c1f8bc24"
   }
 }

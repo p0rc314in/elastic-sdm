@@ -3,4 +3,6 @@ __pycache__/
 .DS_Store
 .venv/
 *.egg-info/
+build/
+dist/
 runs/

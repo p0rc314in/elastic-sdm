@@ -6,13 +6,27 @@ build-backend = "setuptools.build_meta"
 name = "elastic-sdm"
 version = "0.1.0"
 description = "Usage pricing for elastic per-request Sparse Delta Memory state"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
+license-files = ["LICENSE", "THIRD_PARTY.md", "third_party/released_sdm/LICENSE"]
 dependencies = [
-  "numpy==2.3.2",
-  "pyarrow==21.0.0",
-  "tiktoken==0.11.0",
-  "torch==2.8.0",
+  "ninja==1.13.0",
+  "numpy==2.5.2",
+  "pyarrow==25.0.1",
+  "tiktoken==0.14.0",
+  "torch==2.11.0",
+  "triton==3.6.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 
 [tool.setuptools.packages.find]
-include = ["elastic_sdm*"]
+where = [".", "third_party/released_sdm"]
+include = ["elastic_sdm*", "lingua*"]
